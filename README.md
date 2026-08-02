@@ -3,6 +3,24 @@
 ## Project Overview
 `XRoboToolkit-Unity-Client` is a Unity-based software developed for PICO devices to facilitate robot training and remote teleoperation. It works in conjunction with PC-side software to achieve robot training and teleoperation functionalities.
 
+## PICO Enterprise native USB networking
+
+The `pico-enterprise-usb` branch connects to RoboticsService through native PICO
+Enterprise USB tethering instead of `adb reverse`.
+
+- RoboticsService TCP port: `63901`
+- Default USB host: `192.168.245.223`
+- Default Wi-Fi fallback: `10.22.111.121`
+- Auto-connect order: USB first, then Wi-Fi, with a two-second retry cycle
+- The USB/Wi-Fi endpoints and last successful endpoint are persisted with `PlayerPrefs`
+- Entering a `192.168.245.x` address updates the USB endpoint; other IPv4 addresses update the Wi-Fi fallback
+- USB tethering is automatically enabled through the PICO Enterprise API unless the user disables the network-sharing toggle
+- Loopback endpoints are rejected in PICO device builds, so the app does not depend on `adb reverse`; localhost remains available in the Unity Editor for simulation
+
+The PC-side RoboticsService must listen on the USB/Wi-Fi interfaces (for example,
+`0.0.0.0:63901`), and the host firewall must allow TCP port `63901`. Configure the
+USB network connection so it does not replace the PC's normal default route.
+
 ## Unity UI Main Panel Reference
 
 ![ui.png](Docs/ui.png)

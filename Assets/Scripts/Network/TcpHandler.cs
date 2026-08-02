@@ -1,7 +1,5 @@
 using System;
-using System.Collections;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -18,6 +16,7 @@ namespace Robot
         public const int RECEIVE_TIME_OUT_DEFAULT = 25000;
         public const int BUFFER_LEN = 1024 * 63;
         public const int TCP_PORT = 63901;
+        public const float CONNECT_TIMEOUT_SECONDS = 4.0f;
 
         public delegate void ReceiveFunctionMsg(string functionName, string value);
 
@@ -27,19 +26,18 @@ namespace Robot
         public static event ReceiveFunctionMsg ReceiveFunctionEvent;
 
         public static bool SendTrackingData = false;
-        private static object _sendObject = new object();
-        private Queue<NetPacket> _receivePackages = new Queue<NetPacket>();
-        private static Queue<SendData> _sendDatas = new Queue<SendData>();
+        private static readonly object _sendObject = new object();
+        private readonly ConcurrentQueue<NetPacket> _receivePackages = new ConcurrentQueue<NetPacket>();
+        private static readonly ConcurrentQueue<SendData> _sendDatas = new ConcurrentQueue<SendData>();
 
         private Socket _socket;
-        private SocketState _state = SocketState.NONE;
+        private volatile SocketState _state = SocketState.NONE;
 
         private bool _connectInited = false;
-        private static string _address = "127.0.0.1"; // PC IP Address
-        private int _port = 8888; //PC Port
+        private static string _address = EnterpriseConnectionSettings.DefaultUsbHostIp;
+        private int _port = TCP_PORT;
         private int _sendTimeout = 15000; // timeout
         private Thread _sendThread;
-        private ByteBuffer receiveBuffer;
         private string _appVersion = "";
         private string _deviceSN = "";
         private JsonData _trackingJsonData = new JsonData();
@@ -47,13 +45,19 @@ namespace Robot
         private TrackingData _trackingData = new TrackingData();
         private ConcurrentQueue<string> _sendTrackingMsg = new ConcurrentQueue<string>();
         private float _lastHeardSend = 0;
-        private float _lastReconnectTime = 0;
-        private bool _reconnectEnable = false;
+        private int _connectAttemptId;
+        private int _connectStartedAttemptId;
+        private float _connectStartedAt;
+        private volatile bool _destroying;
 
         private void Awake()
         {
             _appVersion = Application.version;
-            _sendThread = new Thread(OnSendThread);
+            _sendThread = new Thread(OnSendThread)
+            {
+                IsBackground = true,
+                Name = "XRoboToolkit TCP sender",
+            };
         }
 
         public SocketState State
@@ -71,91 +75,142 @@ namespace Robot
 
         public void Connect(string address)
         {
-            LogWindow.Info($"Attempting to connect to {address}");
-            _address = address;
-            _reconnectEnable = false;
+            if (_destroying)
+                return;
+
+            if (!EnterpriseConnectionSettings.TryNormalizeIpv4(address, out string normalized))
+            {
+                SetConnectError($"Invalid IPv4 address: {address}");
+                return;
+            }
+
+            if (!EnterpriseConnectionSettings.IsConnectionAddressAllowed(normalized))
+            {
+                SetConnectError("Loopback/adb-reverse endpoints are disabled on PICO Enterprise builds");
+                return;
+            }
+
+            LogWindow.Info($"Attempting to connect to {normalized}");
+            _address = normalized;
             Connect();
         }
 
         private void Connect()
         {
             _port = TCP_PORT;
-            _state = SocketState.CREATE;
             ConnectErrorInfo = "";
-            Debug.Log(string.Format(Tag + "connect to server: ip {0}port: {1}", _address, _port.ToString()));
-            IPAddress ia = IPAddress.Parse(_address);
+            Debug.Log($"{Tag}connect to server: ip {_address} port: {_port}");
+            if (!IPAddress.TryParse(_address, out IPAddress ipAddress))
+            {
+                SetConnectError($"Invalid IPv4 address: {_address}");
+                return;
+            }
+
+            Socket socket = null;
+            Socket previousSocket = null;
+            ConnectAttempt attempt = null;
             try
             {
-                if (_state != SocketState.CLOSE)
+                socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp)
                 {
-                    Close();
-                }
+                    Blocking = true,
+                    SendTimeout = _sendTimeout,
+                    NoDelay = true,
+                    ReceiveTimeout = RECEIVE_TIME_OUT_DEFAULT,
+                };
 
                 lock (_sendObject)
                 {
-                    _socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-                    _socket.Blocking = true;
-                    _socket.SendTimeout = _sendTimeout;
-                    _socket.NoDelay = true;
-                    _socket.ReceiveTimeout = RECEIVE_TIME_OUT_DEFAULT;
-
-
+                    previousSocket = _socket;
+                    _socket = socket;
                     _state = SocketState.CONNECTING;
-                    _socket.BeginConnect(ia, _port, ConnectCallback, _socket);
+                    _connectInited = false;
+                    _connectStartedAt = Time.realtimeSinceStartup;
+                    int attemptId = Interlocked.Increment(ref _connectAttemptId);
+                    _connectStartedAttemptId = attemptId;
+                    attempt = new ConnectAttempt(socket, attemptId);
                 }
+
+                CloseSocket(previousSocket);
+                socket.BeginConnect(ipAddress, _port, ConnectCallback, attempt);
             }
-            catch (SocketException e)
+            catch (Exception e)
             {
-                _state = SocketState.CONNECT_ERROR;
-                ConnectErrorInfo = e.Message;
-                LogWindow.Error($"TCP connection failed: {e.Message}");
-                Debug.LogError(Tag + "Connection failed: " + e.Message);
+                if (attempt != null)
+                    SetConnectError(e.Message, attempt);
+                else
+                    SetConnectError(e.Message);
+                Debug.LogError(Tag + "Connection failed: " + e);
             }
         }
 
         private void ConnectCallback(IAsyncResult async)
         {
+            ConnectAttempt attempt = (ConnectAttempt)async.AsyncState;
             try
             {
-                Socket socket = (Socket)async.AsyncState;
-                if (socket.Connected)
+                attempt.Socket.EndConnect(async);
+                if (!IsCurrentAttempt(attempt))
                 {
-                    _reconnectEnable = true;
-                    socket.EndConnect(async);
-                    _state = SocketState.WORKING;
-                    LogWindow.Info("TCP socket connection established successfully");
-
-                    if (_sendThread.ThreadState == ThreadState.Unstarted)
-                    {
-                        _sendThread.Start();
-                    }
-
-                    receiveBuffer = new ByteBuffer(BUFFER_LEN);
-                    socket.BeginReceive(receiveBuffer.data, receiveBuffer.GetReadableCount(),
-                        receiveBuffer.GetRemainCapacity(), SocketFlags.None, OnDataReceived,
-                        socket);
-                    _connectInited = false;
-                    if (!string.IsNullOrEmpty(_deviceSN))
-                    {
-                        ConnectInit();
-                    }
-
-                    Debug.Log(Tag + "Socket Connected!  ");
+                    CloseSocket(attempt.Socket);
+                    return;
                 }
-                else
+
+                if (!attempt.Socket.Connected)
                 {
-                    _state = SocketState.CONNECT_ERROR;
-                    ConnectErrorInfo = "connect error";
-                    LogWindow.Error("TCP connection failed - socket not connected");
-                    Debug.LogError(Tag + "connect Error");
+                    SetConnectError("connect error", attempt);
+                    return;
                 }
+
+                bool staleAttempt;
+                lock (_sendObject)
+                {
+                    staleAttempt = !IsCurrentAttemptLocked(attempt);
+                    if (!staleAttempt)
+                        _state = SocketState.WORKING;
+                }
+
+                if (staleAttempt)
+                {
+                    CloseSocket(attempt.Socket);
+                    return;
+                }
+
+                LogWindow.Info("TCP socket connection established successfully");
+
+                if (_sendThread.ThreadState == ThreadState.Unstarted)
+                    _sendThread.Start();
+
+                ReceiveContext receiveContext = new ReceiveContext(attempt);
+                attempt.Socket.BeginReceive(
+                    receiveContext.Buffer.data,
+                    receiveContext.Buffer.GetReadableCount(),
+                    receiveContext.Buffer.GetRemainCapacity(),
+                    SocketFlags.None,
+                    OnDataReceived,
+                    receiveContext);
+
+                if (!IsCurrentAttempt(attempt))
+                {
+                    CloseSocket(attempt.Socket);
+                    return;
+                }
+
+                if (!string.IsNullOrEmpty(_deviceSN))
+                    ConnectInit();
+
+                Debug.Log(Tag + "Socket Connected!");
             }
             catch (Exception e)
             {
-                ConnectErrorInfo = e.ToString();
-                LogWindow.Error($"TCP connection exception: {e.Message}");
-                Debug.LogError(Tag + "Connect error,Exception " + e);
-                _state = SocketState.CONNECT_ERROR;
+                if (!IsCurrentAttempt(attempt))
+                {
+                    CloseSocket(attempt.Socket);
+                    return;
+                }
+
+                SetConnectError(e.Message, attempt);
+                Debug.LogError(Tag + "Connect error, Exception " + e);
             }
         }
 
@@ -178,22 +233,29 @@ namespace Robot
 
         private void OnDataReceived(IAsyncResult ar)
         {
-            if (_state != SocketState.WORKING)
+            ReceiveContext context = (ReceiveContext)ar.AsyncState;
+            if (_state != SocketState.WORKING || !IsCurrentAttempt(context.Attempt))
             {
+                CloseSocket(context.Attempt.Socket);
                 return;
             }
 
-            var socket = (Socket)ar.AsyncState;
             try
             {
-                int bytesRead = socket.EndReceive(ar);
+                int bytesRead = context.Attempt.Socket.EndReceive(ar);
+                if (!IsCurrentAttempt(context.Attempt))
+                {
+                    CloseSocket(context.Attempt.Socket);
+                    return;
+                }
+
                 if (bytesRead > 0)
                 {
-                    receiveBuffer.AddWriteIndex(bytesRead);
+                    context.Buffer.AddWriteIndex(bytesRead);
                     bool msgEnough;
                     do
                     {
-                        msgEnough = PackageHandle.Unpack(receiveBuffer, out var package);
+                        msgEnough = PackageHandle.Unpack(context.Buffer, out var package);
                         if (msgEnough)
                         {
                             if (package.Cmd == NetCMD.PACKET_CMD_FROM_CONTROLLER_COMMON_FUNCTION)
@@ -209,12 +271,16 @@ namespace Robot
                         }
                     } while (msgEnough);
 
-                    receiveBuffer.RemoveReadedBytes();
+                    context.Buffer.RemoveReadedBytes();
 
                     // Continue receiving data
-                    socket.BeginReceive(receiveBuffer.data, receiveBuffer.GetReadableCount(),
-                        receiveBuffer.GetRemainCapacity(), SocketFlags.None, OnDataReceived,
-                        socket);
+                    context.Attempt.Socket.BeginReceive(
+                        context.Buffer.data,
+                        context.Buffer.GetReadableCount(),
+                        context.Buffer.GetRemainCapacity(),
+                        SocketFlags.None,
+                        OnDataReceived,
+                        context);
                 }
                 else
                 {
@@ -225,6 +291,12 @@ namespace Robot
             }
             catch (Exception ex)
             {
+                if (!IsCurrentAttempt(context.Attempt))
+                {
+                    CloseSocket(context.Attempt.Socket);
+                    return;
+                }
+
                 LogWindow.Error($"TCP data receive error: {ex.Message}");
                 Debug.LogError($"Error: {ex.Message}");
                 Close();
@@ -277,19 +349,10 @@ namespace Robot
                 }
             }
 
-            if (_reconnectEnable)
+            if (State == SocketState.CONNECTING &&
+                Time.realtimeSinceStartup - _connectStartedAt > CONNECT_TIMEOUT_SECONDS)
             {
-                if (State == SocketState.CLOSE || State == SocketState.CONNECT_ERROR)
-                {
-                    if (!string.IsNullOrEmpty(_address))
-                    {
-                        if (Time.time - _lastReconnectTime > 2)
-                        {
-                            Reconnect();
-                            _lastReconnectTime = Time.time;
-                        }
-                    }
-                }
+                SetConnectTimeoutError(_connectStartedAttemptId);
             }
 
             ReceivePacketHandle();
@@ -297,47 +360,42 @@ namespace Robot
 
         private void ReceivePacketHandle()
         {
-            lock (_receivePackages)
+            while (_receivePackages.TryDequeue(out NetPacket packet))
             {
-                while (_receivePackages.Count > 0)
+                try
                 {
-                    try
+                    if (packet.Cmd == NetCMD.PACKET_CMD_FROM_CONTROLLER_COMMON_FUNCTION)
                     {
-                        NetPacket packet = _receivePackages.Dequeue();
-
-                        if (packet.Cmd == NetCMD.PACKET_CMD_FROM_CONTROLLER_COMMON_FUNCTION)
+                        string content = packet.ToString();
+                        if (string.IsNullOrEmpty(content))
                         {
-                            string content = packet.ToString();
-                            if (string.IsNullOrEmpty(content))
-                            {
-                                continue;
-                            }
-
-                            JsonData json = JsonMapper.ToObject(content);
-                            if (!json.ContainsKey("functionName") || !json.ContainsKey("value"))
-                            {
-                                continue;
-                            }
-
-                            string functionName = json["functionName"].ToString();
-                            Debug.Log("Receive functionName:" + functionName);
-                            if (ReceiveFunctionEvent != null)
-                            {
-                                ReceiveFunctionEvent.Invoke(functionName, json["value"].ToString());
-                            }
+                            continue;
                         }
-                        else
+
+                        JsonData json = JsonMapper.ToObject(content);
+                        if (!json.ContainsKey("functionName") || !json.ContainsKey("value"))
                         {
-                            if (ReceiveEvent != null)
-                            {
-                                ReceiveEvent.Invoke(packet);
-                            }
+                            continue;
+                        }
+
+                        string functionName = json["functionName"].ToString();
+                        Debug.Log("Receive functionName:" + functionName);
+                        if (ReceiveFunctionEvent != null)
+                        {
+                            ReceiveFunctionEvent.Invoke(functionName, json["value"].ToString());
                         }
                     }
-                    catch (Exception e)
+                    else
                     {
-                        Debug.LogError("ReceivePacketHandle Exception:" + e.ToString());
+                        if (ReceiveEvent != null)
+                        {
+                            ReceiveEvent.Invoke(packet);
+                        }
                     }
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError("ReceivePacketHandle Exception:" + e);
                 }
             }
         }
@@ -368,10 +426,8 @@ namespace Robot
                         if (_socket != null && _socket.Connected)
                         {
                             //Sending general messages
-                            while (_sendDatas.Count > 0)
+                            while (_sendDatas.TryDequeue(out SendData sendData))
                             {
-                                SendData sendData = _sendDatas.Dequeue();
-
                                 byte[] data = PackageHandle.Pack(sendData.Cmd, sendData.Content);
 
                                 int totalBytes = data.Length;
@@ -460,45 +516,149 @@ namespace Robot
 
         private void OnDestroy()
         {
-            if (_state != SocketState.CLOSE)
-            {
-                Close();
-            }
-
-            _state = SocketState.DESTROY;
+            _destroying = true;
+            CloseInternal(SocketState.DESTROY);
         }
 
         public void Close()
         {
+            CloseInternal(_destroying ? SocketState.DESTROY : SocketState.CLOSE);
+        }
+
+        private void CloseInternal(SocketState finalState)
+        {
             LogWindow.Info("Closing TCP connection");
             Debug.Log(Tag + "Close:");
-            if (_receivePackages != null)
-            {
-                lock (_receivePackages)
-                {
-                    _receivePackages.Clear();
-                }
-            }
-
-            _state = SocketState.CLOSE;
+            Socket socket;
             lock (_sendObject)
             {
-                if (_socket != null)
+                socket = DetachCurrentSocketLocked();
+                _connectInited = false;
+                _state = finalState;
+            }
+
+            CloseSocket(socket);
+            ClearReceivePackages();
+        }
+
+        private void SetConnectError(string message, ConnectAttempt attempt = null)
+        {
+            Socket socket;
+            lock (_sendObject)
+            {
+                if (attempt != null && !IsCurrentAttemptLocked(attempt))
+                    return;
+
+                ConnectErrorInfo = message;
+                socket = DetachCurrentSocketLocked();
+                _connectInited = false;
+                _state = _destroying ? SocketState.DESTROY : SocketState.CONNECT_ERROR;
+            }
+
+            CloseSocket(socket);
+            LogWindow.Error($"TCP connection failed: {message}");
+            Debug.LogError(Tag + "Connection failed: " + message);
+        }
+
+        private void SetConnectTimeoutError(int attemptId)
+        {
+            Socket socket;
+            string message = $"Connection timeout after {CONNECT_TIMEOUT_SECONDS:0.#} seconds";
+            lock (_sendObject)
+            {
+                if (_state != SocketState.CONNECTING ||
+                    attemptId != _connectAttemptId ||
+                    attemptId != _connectStartedAttemptId)
                 {
-                    try
-                    {
-                        if (_socket.Connected)
-                        {
-                            _socket.Shutdown(SocketShutdown.Both);
-                            _socket.Close();
-                        }
-                    }
-                    catch (Exception e)
-                    {
-                        LogWindow.Error($"TCP socket cleanup error: {e.Message}");
-                        Debug.LogError(Tag + "Clear Error:" + e);
-                    }
+                    return;
                 }
+
+                ConnectErrorInfo = message;
+                socket = DetachCurrentSocketLocked();
+                _connectInited = false;
+                _state = _destroying ? SocketState.DESTROY : SocketState.CONNECT_ERROR;
+            }
+
+            CloseSocket(socket);
+            LogWindow.Error($"TCP connection failed: {message}");
+            Debug.LogError(Tag + "Connection failed: " + message);
+        }
+
+        private bool IsCurrentAttempt(ConnectAttempt attempt)
+        {
+            lock (_sendObject)
+            {
+                return IsCurrentAttemptLocked(attempt);
+            }
+        }
+
+        private bool IsCurrentAttemptLocked(ConnectAttempt attempt)
+        {
+            return attempt != null &&
+                   attempt.Id == _connectAttemptId &&
+                   ReferenceEquals(attempt.Socket, _socket);
+        }
+
+        private Socket DetachCurrentSocketLocked()
+        {
+            Socket socket = _socket;
+            _socket = null;
+            Interlocked.Increment(ref _connectAttemptId);
+            return socket;
+        }
+
+        private static void CloseSocket(Socket socket)
+        {
+            if (socket == null)
+                return;
+
+            try
+            {
+                if (socket.Connected)
+                    socket.Shutdown(SocketShutdown.Both);
+            }
+            catch (Exception)
+            {
+                // The socket may already be disconnected or a connect may still be pending.
+            }
+
+            try
+            {
+                socket.Close();
+            }
+            catch (Exception)
+            {
+                // Best-effort cleanup. The active attempt id prevents stale callbacks from winning.
+            }
+        }
+
+        private void ClearReceivePackages()
+        {
+            while (_receivePackages.TryDequeue(out _))
+            {
+            }
+        }
+
+        private sealed class ConnectAttempt
+        {
+            public readonly Socket Socket;
+            public readonly int Id;
+
+            public ConnectAttempt(Socket socket, int id)
+            {
+                Socket = socket;
+                Id = id;
+            }
+        }
+
+        private sealed class ReceiveContext
+        {
+            public readonly ConnectAttempt Attempt;
+            public readonly ByteBuffer Buffer = new ByteBuffer(BUFFER_LEN);
+
+            public ReceiveContext(ConnectAttempt attempt)
+            {
+                Attempt = attempt;
             }
         }
 

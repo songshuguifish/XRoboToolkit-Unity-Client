@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using System.Net;
 using Robot;
@@ -118,30 +119,49 @@ public class UIOperate : MonoBehaviour
 
     public void TcpConnect(string ip)
     {
-        TargetIP.text = "PC Service: " + ip;
+        if (!EnterpriseConnectionSettings.TryNormalizeIpv4(ip, out string normalized) ||
+            !EnterpriseConnectionSettings.IsConnectionAddressAllowed(normalized))
+        {
+            Toast.Show("Invalid enterprise PC service IP");
+            return;
+        }
+
+        EnterpriseConnectionSettings.RememberManualHost(normalized);
+        ShowConnectionAttempt(normalized);
         ReconnectBtn.gameObject.SetActive(true);
-        TcpHandler.Connect(ip);
-        ConnectSuccess();
+        TcpHandler.Connect(normalized);
+    }
+
+    public void ShowConnectionAttempt(string ip)
+    {
+        if (TargetIP == null)
+            return;
+
+        string transport = EnterpriseConnectionSettings.DescribeTransport(ip);
+        TargetIP.text = $"PC Service [{transport}]: {ip}";
     }
 
     public void ConnectSuccess()
     {
-        TargetIP.text = "PC Service: " + TcpHandler.GetTargetIP;
+        string targetIp = TcpHandler.GetTargetIP;
+        ShowConnectionAttempt(targetIp);
+        if (TcpHandler.State == SocketState.WORKING)
+            EnterpriseConnectionSettings.RememberSuccessfulHost(targetIp);
     }
 
     private void OnBindEnterpriseService(bool bind)
     {
         Debug.Log("OnBindEnterpriseService " + bind);
-        if (bind)
-        {
-            //The shared network function is only available on B-end devices.
-            NetshareTog.gameObject.SetActive(true);
-            PXR_Enterprise.GetSwitchSystemFunctionStatus(SystemFunctionSwitchEnum.SFS_USB_TETHERING,
-                (value) => { NetshareTog.SetIsOnWithoutNotify(value == 1); });
+        if (!bind)
+            return;
 
-            string sn = PXR_Enterprise.StateGetDeviceInfo(SystemInfoEnum.EQUIPMENT_SN);
-            SetDeviceSN(sn);
-        }
+        // USB tethering is available on PICO enterprise devices. The persisted
+        // toggle preference defaults to enabled for direct native USB networking.
+        NetshareTog.gameObject.SetActive(true);
+        RefreshUsbTetheringStatus(true);
+
+        string sn = PXR_Enterprise.StateGetDeviceInfo(SystemInfoEnum.EQUIPMENT_SN);
+        SetDeviceSN(sn);
     }
 
     private void SetDeviceSN(string sn)
@@ -154,13 +174,43 @@ public class UIOperate : MonoBehaviour
     private void OnNetShareTog(bool ison)
     {
         Debug.Log("OnNetShareTog:" + ison);
-        if (ison)
-            PXR_Enterprise.SwitchSystemFunction(SystemFunctionSwitchEnum.SFS_USB_TETHERING, SwitchEnum.S_ON);
-        else
-            PXR_Enterprise.SwitchSystemFunction(SystemFunctionSwitchEnum.SFS_USB_TETHERING, SwitchEnum.S_OFF);
+        EnterpriseConnectionSettings.AutoEnableUsbTethering = ison;
+        PXR_Enterprise.SwitchSystemFunction(
+            SystemFunctionSwitchEnum.SFS_USB_TETHERING,
+            ison ? SwitchEnum.S_ON : SwitchEnum.S_OFF);
+        StartCoroutine(RefreshUsbTetheringStatusAfterDelay(0.75f));
+    }
 
-        PXR_Enterprise.GetSwitchSystemFunctionStatus(SystemFunctionSwitchEnum.SFS_USB_TETHERING,
-            (value) => { Debug.Log("SFS_USB_TETHERING:" + value); });
+    private void RefreshUsbTetheringStatus(bool applyAutoEnable)
+    {
+        PXR_Enterprise.GetSwitchSystemFunctionStatus(
+            SystemFunctionSwitchEnum.SFS_USB_TETHERING,
+            value =>
+            {
+                bool enabled = value == 1;
+                Debug.Log("SFS_USB_TETHERING:" + value);
+                if (applyAutoEnable &&
+                    EnterpriseConnectionSettings.AutoEnableUsbTethering &&
+                    !enabled)
+                {
+                    Debug.Log("PICO Enterprise: automatically enabling USB tethering");
+                    LogWindow.Info("Enabling PICO Enterprise USB tethering");
+                    PXR_Enterprise.SwitchSystemFunction(
+                        SystemFunctionSwitchEnum.SFS_USB_TETHERING,
+                        SwitchEnum.S_ON);
+                    NetshareTog.SetIsOnWithoutNotify(true);
+                    StartCoroutine(RefreshUsbTetheringStatusAfterDelay(0.75f));
+                    return;
+                }
+
+                NetshareTog.SetIsOnWithoutNotify(enabled);
+            });
+    }
+
+    private IEnumerator RefreshUsbTetheringStatusAfterDelay(float delaySeconds)
+    {
+        yield return new WaitForSecondsRealtime(delaySeconds);
+        RefreshUsbTetheringStatus(false);
     }
 
     public void OnQuit()

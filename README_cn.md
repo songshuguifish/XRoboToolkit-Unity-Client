@@ -2,6 +2,24 @@
 
 ## 项目概述
 `XRoboToolkit-Unity-Client` 是一个基于PICO设备用Unity引擎开发的服务于机器人训练与遥控的软件。本软件与PC端软件协助完成机器人的训练与遥控。
+
+## PICO 企业版原生 USB 网络
+
+`pico-enterprise-usb` 分支使用 PICO 企业版原生 USB 网络连接 RoboticsService，
+不再依赖 `adb reverse`。
+
+- RoboticsService TCP 端口：`63901`
+- 默认 USB 主机地址：`192.168.245.223`
+- 默认 Wi-Fi fallback 地址：`10.22.111.121`
+- 自动连接顺序：优先 USB，然后 Wi-Fi；完整失败后每 2 秒重试
+- USB、Wi-Fi 和最后成功连接地址会通过 `PlayerPrefs` 持久化
+- 手动输入 `192.168.245.x` 会更新 USB 地址，其他 IPv4 地址会更新 Wi-Fi fallback
+- 默认通过 PICO 企业 API 自动开启 USB 网络共享；用户关闭网络共享开关后会保存该偏好
+- PICO 设备构建会拒绝回环地址，避免重新走 `adb reverse`；Unity Editor 仍允许 localhost 调试
+
+PC 端 RoboticsService 必须监听 USB/Wi-Fi 网卡，例如 `0.0.0.0:63901`，并在防火墙中
+允许 TCP `63901`。同时建议把 USB 网卡配置为不接管 PC 的默认路由。
+
 ## 功能特性
 - **训练数据录制**可以将VST图像与位姿数据同步录制为mp4文件保存到本机的Download目录。
 - **机器人遥控**：将本机位姿数据传输到PC机器人端，用来遥控机器人。

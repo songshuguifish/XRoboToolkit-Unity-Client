@@ -1,28 +1,34 @@
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace Robot
 {
     /// <summary>
     /// Keeps the dedicated data-collection client connected without VR UI input.
+    /// Native USB Ethernet is tried before the persisted Wi-Fi fallback.
     /// </summary>
     public sealed class AutoConnectBootstrap : MonoBehaviour
     {
-        private const string TargetIp = "127.0.0.1";
-        private const float RetryIntervalS = 2.0f;
-        private const float MonitorIntervalS = 0.5f;
+        private const float RetryCycleIntervalS = 2.0f;
+        private const float CandidateIntervalS = 0.25f;
+        private const float MonitorIntervalS = 0.25f;
 
         private static AutoConnectBootstrap _instance;
+        private readonly List<string> _candidates = new List<string>();
         private TcpHandler _tcpHandler;
         private UIOperate _uiOperate;
+        private int _candidateIndex;
         private float _nextConnectAttempt;
+        private string _automaticAttemptAddress;
+        private string _lastConnectedAddress;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void Bootstrap()
         {
             if (_instance != null)
                 return;
-            GameObject autoConnectObject = new GameObject("PicoAutoConnectBootstrap");
+            GameObject autoConnectObject = new GameObject("PicoEnterpriseAutoConnect");
             DontDestroyOnLoad(autoConnectObject);
             _instance = autoConnectObject.AddComponent<AutoConnectBootstrap>();
         }
@@ -34,6 +40,7 @@ namespace Robot
                 Destroy(gameObject);
                 return;
             }
+
             _instance = this;
             DontDestroyOnLoad(gameObject);
             Application.runInBackground = true;
@@ -44,7 +51,7 @@ namespace Robot
 
         private IEnumerator Start()
         {
-            // Let scene Awake methods attach the normal UI listeners first.
+            // Let scene Awake methods attach the normal UI and enterprise-service listeners first.
             yield return null;
             while (true)
             {
@@ -83,21 +90,92 @@ namespace Robot
         {
             if (_tcpHandler == null)
                 return;
-            if (_tcpHandler.State == SocketState.WORKING ||
-                _tcpHandler.State == SocketState.CONNECTING)
+
+            string currentTarget = TcpHandler.GetTargetIP;
+            if (!string.IsNullOrEmpty(_automaticAttemptAddress) &&
+                !string.Equals(currentTarget, _automaticAttemptAddress))
+            {
+                // A UI/manual connection superseded our current automatic attempt.
+                _automaticAttemptAddress = null;
+            }
+
+            if (_tcpHandler.State == SocketState.WORKING)
+            {
+                if (!string.Equals(_lastConnectedAddress, currentTarget))
+                {
+                    _lastConnectedAddress = currentTarget;
+                    EnterpriseConnectionSettings.RememberSuccessfulHost(currentTarget);
+                    Debug.Log($"PICO enterprise connection established via " +
+                              $"{EnterpriseConnectionSettings.DescribeTransport(currentTarget)}: " +
+                              $"{currentTarget}:{TcpHandler.TCP_PORT}");
+                    _uiOperate?.ConnectSuccess();
+                }
+
+                _automaticAttemptAddress = null;
+                _candidateIndex = 0;
                 return;
+            }
+
+            _lastConnectedAddress = null;
+            if (_tcpHandler.State == SocketState.CONNECTING ||
+                _tcpHandler.State == SocketState.CREATE)
+            {
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(_automaticAttemptAddress))
+            {
+                AdvanceCandidate();
+                _automaticAttemptAddress = null;
+            }
+
             if (Time.realtimeSinceStartup < _nextConnectAttempt)
                 return;
 
-            _nextConnectAttempt = Time.realtimeSinceStartup + RetryIntervalS;
-            Debug.Log($"PICO auto-connect: connecting to {TargetIp}:{TcpHandler.TCP_PORT}");
-            _tcpHandler.Connect(TargetIp);
+            if (_candidates.Count == 0 || _candidateIndex >= _candidates.Count)
+                ReloadCandidates();
+            if (_candidates.Count == 0)
+                return;
+
+            string address = _candidates[_candidateIndex];
+            _automaticAttemptAddress = address;
+            string transport = EnterpriseConnectionSettings.DescribeTransport(address);
+            Debug.Log($"PICO enterprise auto-connect: trying {transport} " +
+                      $"{address}:{TcpHandler.TCP_PORT}");
+            _uiOperate?.ShowConnectionAttempt(address);
+            _tcpHandler.Connect(address);
+        }
+
+        private void ReloadCandidates()
+        {
+            _candidates.Clear();
+            _candidates.AddRange(EnterpriseConnectionSettings.GetAutoConnectCandidates());
+            _candidateIndex = 0;
+        }
+
+        private void AdvanceCandidate()
+        {
+            _candidateIndex++;
+            if (_candidateIndex >= _candidates.Count)
+            {
+                ReloadCandidates();
+                _nextConnectAttempt = Time.realtimeSinceStartup + RetryCycleIntervalS;
+            }
+            else
+            {
+                _nextConnectAttempt = Time.realtimeSinceStartup + CandidateIntervalS;
+            }
         }
 
         private void OnApplicationPause(bool paused)
         {
-            if (!paused)
-                _nextConnectAttempt = 0.0f;
+            if (paused)
+                return;
+
+            _automaticAttemptAddress = null;
+            _lastConnectedAddress = null;
+            ReloadCandidates();
+            _nextConnectAttempt = 0.0f;
         }
     }
 }

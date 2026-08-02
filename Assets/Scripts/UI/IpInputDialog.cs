@@ -1,4 +1,3 @@
-using System.Net;
 using Robot;
 using TMPro;
 using UnityEngine;
@@ -27,6 +26,25 @@ public class IpInputDialog : MonoBehaviour
         Remind.text = "";
         ConnectBtn.gameObject.SetActive(true);
         _connecting = false;
+
+        string currentAddress = TcpHandler != null &&
+                                (TcpHandler.State == SocketState.CONNECTING ||
+                                 TcpHandler.State == SocketState.WORKING)
+            ? TcpHandler.GetTargetIP
+            : EnterpriseConnectionSettings.LastSuccessfulHostIp;
+
+        if (string.IsNullOrEmpty(currentAddress))
+            currentAddress = TcpHandler.GetTargetIP;
+
+        if (!EnterpriseConnectionSettings.TryNormalizeIpv4(currentAddress, out string normalized) ||
+            !EnterpriseConnectionSettings.IsConnectionAddressAllowed(normalized))
+        {
+            normalized = EnterpriseConnectionSettings.PreferUsb
+                ? EnterpriseConnectionSettings.UsbHostIp
+                : EnterpriseConnectionSettings.WifiHostIp;
+        }
+
+        TmpInput.SetTextWithoutNotify(normalized);
     }
 
     private void OnCloseBtn()
@@ -36,16 +54,29 @@ public class IpInputDialog : MonoBehaviour
 
     public void OnConnectBtn()
     {
-        string ip = TmpInput.text;
-        if (!IPAddress.TryParse(ip, out _))
+        if (!EnterpriseConnectionSettings.TryNormalizeIpv4(TmpInput.text, out string ip))
         {
-            SetRemind(LogType.Error, "The IP format is incorrect!");
+            SetRemind(LogType.Error, "Enter a valid IPv4 address.");
+            return;
+        }
+
+        if (!EnterpriseConnectionSettings.IsConnectionAddressAllowed(ip))
+        {
+            SetRemind(LogType.Error,
+                "Loopback/adb-reverse addresses are disabled on PICO Enterprise.");
+            return;
+        }
+
+        if (uiRobot == null || TcpHandler == null)
+        {
+            SetRemind(LogType.Error, "Connection components are not available.");
             return;
         }
 
         SetRemind(LogType.Log, "Connecting...");
         _connecting = true;
-        TcpHandler.Connect(ip);
+        TmpInput.SetTextWithoutNotify(ip);
+        uiRobot.TcpConnect(ip);
         ConnectBtn.gameObject.SetActive(false);
     }
 
