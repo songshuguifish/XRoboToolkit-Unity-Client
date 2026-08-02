@@ -1,4 +1,5 @@
 ﻿using System.Collections;
+using System.Collections.Concurrent;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -10,12 +11,22 @@ public class LogWindow : MonoBehaviour
     public ScrollRect scrollRect;
 
     private static LogWindow _instance;
+    private static readonly ConcurrentQueue<string> PendingMessages =
+        new ConcurrentQueue<string>();
 
     public RectTransform rectTransform;
 
     private void Awake()
     {
         _instance = this;
+    }
+
+    private void Update()
+    {
+        while (PendingMessages.TryDequeue(out string message))
+        {
+            AppendText(message);
+        }
     }
 
     private IEnumerator AutoScrollCoroutine()
@@ -60,10 +71,9 @@ public class LogWindow : MonoBehaviour
 
     private static void Message(string message)
     {
-        if (_instance != null)
-        {
-            _instance.AppendText(message);
-        }
+        // Socket callbacks run on ThreadPool threads. Queue every message and
+        // let Update apply TextMeshPro/UI changes on Unity's main thread.
+        PendingMessages.Enqueue(message);
     }
 
     public static void Info(string info)

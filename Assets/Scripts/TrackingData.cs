@@ -72,6 +72,7 @@ namespace Robot
                 int sensorFrameIndex = 0;
                 PXR_System.GetPredictedMainSensorStateNew(ref sensor, ref sensorFrameIndex);
                 JsonData sensorJson = GetSensorJson(sensor);
+                PicoImuV1.AppendHead(sensorJson, sensor);
                 //     sensorJson["handMode"] = (int)HandModeValue;
                 totalData["Head"] = sensorJson;
                 // SendToServerMessage("GetHeadTracking", sensorJson.ToJson());
@@ -321,6 +322,10 @@ namespace Robot
 
             InputDevice left = InputDevices.GetDeviceAtXRNode(XRNode.LeftHand);
             GetControllerJsonData(left, ref _leftControllerJson);
+            PicoImuV1.AppendController(
+                _leftControllerJson,
+                PXR_Input.Controller.LeftController,
+                predictTime);
             _controllerDataJson["left"] = _leftControllerJson;
             _controllerDataJson["left"]["pose"] = GetPoseStr(leftPosition, leftRotation);
 
@@ -331,6 +336,10 @@ namespace Robot
 
             InputDevice right = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
             GetControllerJsonData(right, ref _rightControllerJson);
+            PicoImuV1.AppendController(
+                _rightControllerJson,
+                PXR_Input.Controller.RightController,
+                predictTime);
             _controllerDataJson["right"] = _rightControllerJson;
             _controllerDataJson["right"]["pose"] = GetPoseStr(rightPosition, rightRotation);
 
