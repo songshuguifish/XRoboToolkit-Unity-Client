@@ -10,14 +10,14 @@ Enterprise USB tethering instead of `adb reverse`.
 
 - RoboticsService TCP port: `63901`
 - Default USB host: `192.168.245.223`
-- Default Wi-Fi fallback: `10.22.111.121`
-- Auto-connect order: USB first, then Wi-Fi, with a two-second retry cycle
-- The USB/Wi-Fi endpoints and last successful endpoint are persisted with `PlayerPrefs`
-- Entering a `192.168.245.x` address updates the USB endpoint; other IPv4 addresses update the Wi-Fi fallback
+- Connection policy: native USB only; there is no Wi-Fi fallback
+- Failed USB connections are retried every two seconds
+- The configured USB endpoint and last successful USB endpoint are persisted with `PlayerPrefs`
+- Manual endpoints must belong to the PICO USB tethering subnet: `192.168.245.x`
 - USB tethering is automatically enabled through the PICO Enterprise API unless the user disables the network-sharing toggle
-- Loopback endpoints are rejected in PICO device builds, so the app does not depend on `adb reverse`; localhost remains available in the Unity Editor for simulation
+- Wi-Fi and loopback endpoints are rejected in PICO device builds, so the app does not depend on wireless networking or `adb reverse`; localhost remains available in the Unity Editor for simulation
 
-The PC-side RoboticsService must listen on the USB/Wi-Fi interfaces (for example,
+The PC-side RoboticsService must listen on the USB interface (for example,
 `0.0.0.0:63901`), and the host firewall must allow TCP port `63901`. Configure the
 USB network connection so it does not replace the PC's normal default route.
 
@@ -315,7 +315,7 @@ A: Connect the headset to public internet and run it.
 
 - Q: Failed to connect on Linux.
 
-A: Ensure the PC and headset are in the same WiFi network. Run the 3D application first and then run the Headset App.
+A: Enable PICO Enterprise USB tethering, verify that the PC USB address is `192.168.245.223`, and ensure RoboticsService listens on TCP port `63901` on that interface. This branch does not fall back to Wi-Fi.
 
 - Q: How to update the video source? [V1.1.0+]
 

@@ -6,7 +6,7 @@ namespace Robot
 {
     /// <summary>
     /// Keeps the dedicated data-collection client connected without VR UI input.
-    /// Native USB Ethernet is tried before the persisted Wi-Fi fallback.
+    /// Only native PICO Enterprise USB Ethernet endpoints are considered.
     /// </summary>
     public sealed class AutoConnectBootstrap : MonoBehaviour
     {

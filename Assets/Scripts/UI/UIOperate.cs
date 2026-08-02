@@ -122,7 +122,7 @@ public class UIOperate : MonoBehaviour
         if (!EnterpriseConnectionSettings.TryNormalizeIpv4(ip, out string normalized) ||
             !EnterpriseConnectionSettings.IsConnectionAddressAllowed(normalized))
         {
-            Toast.Show("Invalid enterprise PC service IP");
+            Toast.Show("Use the PICO USB host address (192.168.245.x)");
             return;
         }
 

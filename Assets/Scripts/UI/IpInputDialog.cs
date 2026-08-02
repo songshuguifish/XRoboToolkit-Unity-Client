@@ -39,9 +39,7 @@ public class IpInputDialog : MonoBehaviour
         if (!EnterpriseConnectionSettings.TryNormalizeIpv4(currentAddress, out string normalized) ||
             !EnterpriseConnectionSettings.IsConnectionAddressAllowed(normalized))
         {
-            normalized = EnterpriseConnectionSettings.PreferUsb
-                ? EnterpriseConnectionSettings.UsbHostIp
-                : EnterpriseConnectionSettings.WifiHostIp;
+            normalized = EnterpriseConnectionSettings.UsbHostIp;
         }
 
         TmpInput.SetTextWithoutNotify(normalized);
@@ -63,7 +61,7 @@ public class IpInputDialog : MonoBehaviour
         if (!EnterpriseConnectionSettings.IsConnectionAddressAllowed(ip))
         {
             SetRemind(LogType.Error,
-                "Loopback/adb-reverse addresses are disabled on PICO Enterprise.");
+                "Use the PICO USB host address (192.168.245.x). Wi-Fi is disabled.");
             return;
         }
 

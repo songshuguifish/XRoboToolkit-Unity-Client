@@ -86,7 +86,8 @@ namespace Robot
 
             if (!EnterpriseConnectionSettings.IsConnectionAddressAllowed(normalized))
             {
-                SetConnectError("Loopback/adb-reverse endpoints are disabled on PICO Enterprise builds");
+                SetConnectError(
+                    "Only PICO Enterprise USB endpoints (192.168.245.x) are allowed on device builds");
                 return;
             }
 
