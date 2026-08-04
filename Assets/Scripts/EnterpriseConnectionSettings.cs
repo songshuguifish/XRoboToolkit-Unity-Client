@@ -7,19 +7,22 @@ namespace Robot
 {
     /// <summary>
     /// Persistent connection settings for PICO Enterprise USB tethering.
-    /// Device builds only connect through the native 192.168.245.x USB network.
+    ///
+    /// No USB subnet or host address is hardcoded. The endpoint comes from
+    /// <see cref="EnterpriseUsbDiscovery"/>, and an address is only accepted when it is
+    /// discovery-verified or on the /24 that Android actually assigned to the USB
+    /// interface. Android hands out different subnets per device and per session
+    /// (192.168.37.x, 192.168.245.x, ...), so any fixed guess eventually breaks.
     /// </summary>
     public static class EnterpriseConnectionSettings
     {
-        public const string DefaultUsbHostIp = "192.168.245.223";
-
         private const string UsbHostIpKey = "XRoboToolkit.Enterprise.UsbHostIp";
         private const string LastSuccessfulHostIpKey = "XRoboToolkit.Enterprise.LastSuccessfulHostIp";
         private const string AutoEnableUsbTetheringKey = "XRoboToolkit.Enterprise.AutoEnableUsbTethering";
 
         public static string UsbHostIp
         {
-            get { return ReadIpv4(UsbHostIpKey, DefaultUsbHostIp); }
+            get { return ReadIpv4(UsbHostIpKey, string.Empty); }
             set { WriteIpv4(UsbHostIpKey, value); }
         }
 
@@ -38,17 +41,27 @@ namespace Robot
             }
         }
 
+        /// <summary>
+        /// Ordered auto-connect candidates: the freshly discovered PC endpoint first,
+        /// then addresses remembered from earlier sessions (which are still validated
+        /// against the current USB subnet, so a stale one is dropped automatically).
+        /// </summary>
         public static List<string> GetAutoConnectCandidates()
         {
+            // Non-blocking; results land in EnterpriseUsbDiscovery.Host for this or a
+            // later reload cycle.
+            EnterpriseUsbDiscovery.RequestRefresh();
+
             List<string> candidates = new List<string>();
+            AddCandidate(candidates, EnterpriseUsbDiscovery.Host);
             AddCandidate(candidates, UsbHostIp);
             AddCandidate(candidates, LastSuccessfulHostIp);
             return candidates;
         }
 
         /// <summary>
-        /// Persists a manually entered endpoint only when it belongs to the
-        /// PICO Enterprise USB tethering subnet.
+        /// Persists a manually entered endpoint only when it belongs to the live PICO
+        /// Enterprise USB tethering subnet.
         /// </summary>
         public static void RememberManualHost(string address)
         {
@@ -86,10 +99,49 @@ namespace Robot
 #endif
         }
 
+        /// <summary>
+        /// An address is a valid USB host when a nonce-matched discovery reply came from
+        /// it (which proves the PC answered on a udev-verified PICO USB interface), or
+        /// when it shares the /24 of the device's live USB interface.
+        /// </summary>
         public static bool IsUsbHost(string address)
         {
-            return TryNormalizeIpv4(address, out string normalized) &&
-                   IsUsbSubnetAddress(normalized);
+            if (!TryNormalizeIpv4(address, out string normalized))
+                return false;
+
+            return EnterpriseUsbDiscovery.IsVerifiedHost(normalized) ||
+                   EnterpriseUsbDiscovery.IsOnUsbSubnet(normalized);
+        }
+
+        /// <summary>
+        /// Best known host address for prefilling the manual-entry UI: the discovered
+        /// endpoint if there is one, otherwise whatever a previous session remembered.
+        /// </summary>
+        public static string PreferredHostIp
+        {
+            get
+            {
+                if (TryNormalizeIpv4(EnterpriseUsbDiscovery.Host, out string discovered))
+                    return discovered;
+                if (TryNormalizeIpv4(UsbHostIp, out string remembered))
+                    return remembered;
+                return LastSuccessfulHostIp;
+            }
+        }
+
+        /// <summary>
+        /// Operator-facing description of the endpoints currently accepted, so the UI
+        /// never names a subnet that is not the one actually in use.
+        /// </summary>
+        public static string DescribeAllowedEndpoints()
+        {
+            if (EnterpriseUsbDiscovery.TryResolveUsbInterface(out IPAddress local, out _, out string name))
+            {
+                byte[] bytes = local.GetAddressBytes();
+                return $"{bytes[0]}.{bytes[1]}.{bytes[2]}.x on {name}";
+            }
+
+            return "none yet - USB tethering is not up";
         }
 
         public static string DescribeTransport(string address)
@@ -141,20 +193,6 @@ namespace Robot
                 return;
             if (!candidates.Contains(normalized))
                 candidates.Add(normalized);
-        }
-
-        private static bool IsUsbSubnetAddress(string address)
-        {
-            if (!IPAddress.TryParse(address, out IPAddress parsed))
-                return false;
-
-            byte[] bytes = parsed.GetAddressBytes();
-            return bytes.Length == 4 &&
-                   bytes[0] == 192 &&
-                   bytes[1] == 168 &&
-                   bytes[2] == 245 &&
-                   bytes[3] > 0 &&
-                   bytes[3] < 255;
         }
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using UnityEngine;
 
 namespace Robot
@@ -9,6 +10,12 @@ namespace Robot
         private const string FunctionName = "recording_cue";
         private const int SampleRate = 44100;
         private static RecordingCuePlayer _instance;
+
+        // TcpHandler invokes ReceiveFunctionEvent from a worker thread. Unity
+        // audio APIs must only be touched from the main thread, so callbacks
+        // enqueue cue names and Update drains them.
+        private readonly ConcurrentQueue<string> _pendingCues =
+            new ConcurrentQueue<string>();
 
         private AudioSource _audioSource;
         private AudioClip _startClip;
@@ -60,6 +67,15 @@ namespace Robot
         private void OnFunctionMessage(string functionName, string value)
         {
             if (!string.Equals(functionName, FunctionName, StringComparison.Ordinal))
+                return;
+            _pendingCues.Enqueue(value);
+        }
+
+        private void Update()
+        {
+            // Process one cue per frame so a burst does not immediately stop and
+            // replace every preceding PlayOneShot in the same frame.
+            if (!_pendingCues.TryDequeue(out string value))
                 return;
             switch (value)
             {

@@ -1,5 +1,6 @@
-﻿using System.Collections;
 using System.Collections.Concurrent;
+using System.Threading;
+using System.Collections;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -11,22 +12,21 @@ public class LogWindow : MonoBehaviour
     public ScrollRect scrollRect;
 
     private static LogWindow _instance;
-    private static readonly ConcurrentQueue<string> PendingMessages =
-        new ConcurrentQueue<string>();
+    private static readonly ConcurrentQueue<string> PendingMessages = new ConcurrentQueue<string>();
+    private static int _mainThreadId;
 
     public RectTransform rectTransform;
 
     private void Awake()
     {
         _instance = this;
+        _mainThreadId = Thread.CurrentThread.ManagedThreadId;
+        FlushPendingMessages();
     }
 
     private void Update()
     {
-        while (PendingMessages.TryDequeue(out string message))
-        {
-            AppendText(message);
-        }
+        FlushPendingMessages();
     }
 
     private IEnumerator AutoScrollCoroutine()
@@ -59,6 +59,18 @@ public class LogWindow : MonoBehaviour
 
     public void AppendText(string message)
     {
+        if (_instance == null)
+        {
+            PendingMessages.Enqueue(message);
+            return;
+        }
+
+        if (Thread.CurrentThread.ManagedThreadId != _mainThreadId)
+        {
+            PendingMessages.Enqueue(message);
+            return;
+        }
+
         if (_instance != null)
         {
             // add time prefix of local timezone to the message
@@ -71,9 +83,32 @@ public class LogWindow : MonoBehaviour
 
     private static void Message(string message)
     {
-        // Socket callbacks run on ThreadPool threads. Queue every message and
-        // let Update apply TextMeshPro/UI changes on Unity's main thread.
-        PendingMessages.Enqueue(message);
+        if (_instance == null)
+        {
+            PendingMessages.Enqueue(message);
+            return;
+        }
+
+        if (Thread.CurrentThread.ManagedThreadId != _mainThreadId)
+        {
+            PendingMessages.Enqueue(message);
+            return;
+        }
+
+        _instance.AppendText(message);
+    }
+
+    private static void FlushPendingMessages()
+    {
+        if (_instance == null)
+        {
+            return;
+        }
+
+        while (PendingMessages.TryDequeue(out string message))
+        {
+            _instance.AppendText(message);
+        }
     }
 
     public static void Info(string info)

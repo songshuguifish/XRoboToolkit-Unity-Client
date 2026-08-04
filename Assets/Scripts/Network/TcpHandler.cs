@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading;
 using LitJson;
 using Network;
+using Unity.XR.PXR;
 using UnityEngine;
 
 namespace Robot
@@ -26,6 +27,7 @@ namespace Robot
         public static event ReceiveFunctionMsg ReceiveFunctionEvent;
 
         public static bool SendTrackingData = false;
+        public static bool EnterpriseDirectTrackingEnabled = true;
         private static readonly object _sendObject = new object();
         private readonly ConcurrentQueue<NetPacket> _receivePackages = new ConcurrentQueue<NetPacket>();
         private static readonly ConcurrentQueue<SendData> _sendDatas = new ConcurrentQueue<SendData>();
@@ -34,16 +36,34 @@ namespace Robot
         private volatile SocketState _state = SocketState.NONE;
 
         private bool _connectInited = false;
-        private static string _address = EnterpriseConnectionSettings.DefaultUsbHostIp;
+        private static string _address = string.Empty;
         private int _port = TCP_PORT;
         private int _sendTimeout = 15000; // timeout
+        [SerializeField] private int trackingThreadIdleSleepMs = 5;
+        [SerializeField] private int trackingThreadWaitForHeadSleepMs = 1;
+        [SerializeField] private int trackingThreadQueueBackpressureSleepMs = 1;
+        [SerializeField] private bool outputTrackingRateToLogWindow = false;
+        [SerializeField] private float trackingRateLogIntervalSeconds = 1f;
+        [SerializeField] private bool outputEnterpriseControllerPayloadToLog = true;
+        [SerializeField] private float enterpriseControllerPayloadLogIntervalSeconds = 1f;
         private Thread _sendThread;
+        private Thread _trackingThread;
         private string _appVersion = "";
         private string _deviceSN = "";
         private JsonData _trackingJsonData = new JsonData();
         private JsonData _sendJson = new JsonData();
         private TrackingData _trackingData = new TrackingData();
         private ConcurrentQueue<string> _sendTrackingMsg = new ConcurrentQueue<string>();
+        private int _pendingDirectTrackingPackets = 0;
+        private bool _cachedAppFocus = true;
+        private int _cachedActiveInputDevice = (int)ActiveInputDevice.ControllerActive;
+        private long _lastDirectTrackingHeadSampleSeq;
+        private long _lastDirectTrackingControllerSampleSeq;
+        private readonly System.Diagnostics.Stopwatch _trackingRateStopwatch = new System.Diagnostics.Stopwatch();
+        private int _trackingPacketsSentInWindow = 0;
+        private string _lastTrackingSendMode = "idle";
+        private string _lastDirectTrackingGateStatus;
+        private long _lastEnterpriseControllerPayloadLogTicks;
         private float _lastHeardSend = 0;
         private int _connectAttemptId;
         private int _connectStartedAttemptId;
@@ -58,6 +78,12 @@ namespace Robot
                 IsBackground = true,
                 Name = "XRoboToolkit TCP sender",
             };
+            _trackingThread = new Thread(OnTrackingThread)
+            {
+                IsBackground = true,
+                Name = "XRoboToolkit enterprise tracking sender",
+            };
+            _trackingRateStopwatch.Start();
         }
 
         public SocketState State
@@ -87,7 +113,8 @@ namespace Robot
             if (!EnterpriseConnectionSettings.IsConnectionAddressAllowed(normalized))
             {
                 SetConnectError(
-                    "Only PICO Enterprise USB endpoints (192.168.245.x) are allowed on device builds");
+                    $"{normalized} is not on the PICO Enterprise USB link; device builds only " +
+                    "accept discovered or same-subnet USB endpoints");
                 return;
             }
 
@@ -98,7 +125,11 @@ namespace Robot
 
         private void Connect()
         {
-            _port = TCP_PORT;
+            // Honour the port advertised by discovery; TCP_PORT is only the fallback for
+            // remembered endpoints from a session that predates a discovery reply.
+            _port = string.Equals(_address, EnterpriseUsbDiscovery.Host) && EnterpriseUsbDiscovery.TcpPort > 0
+                ? EnterpriseUsbDiscovery.TcpPort
+                : TCP_PORT;
             ConnectErrorInfo = "";
             Debug.Log($"{Tag}connect to server: ip {_address} port: {_port}");
             if (!IPAddress.TryParse(_address, out IPAddress ipAddress))
@@ -145,6 +176,17 @@ namespace Robot
             }
         }
 
+        private static void StartIfUnstarted(Thread thread)
+        {
+            if (thread == null)
+                return;
+            if ((thread.ThreadState & ThreadState.Unstarted) == 0)
+                return;
+
+            thread.Start();
+            Debug.Log($"{Tag}started thread {thread.Name}");
+        }
+
         private void ConnectCallback(IAsyncResult async)
         {
             ConnectAttempt attempt = (ConnectAttempt)async.AsyncState;
@@ -179,8 +221,13 @@ namespace Robot
 
                 LogWindow.Info("TCP socket connection established successfully");
 
-                if (_sendThread.ThreadState == ThreadState.Unstarted)
-                    _sendThread.Start();
+                // ThreadState is a flags enum and both threads are created with
+                // IsBackground = true, so an unstarted one reports
+                // Unstarted | Background (12), never Unstarted (8) on its own. Comparing
+                // with == therefore never matched and neither thread was ever started,
+                // which silently disabled the whole direct tracking send path.
+                StartIfUnstarted(_sendThread);
+                StartIfUnstarted(_trackingThread);
 
                 ReceiveContext receiveContext = new ReceiveContext(attempt);
                 attempt.Socket.BeginReceive(
@@ -328,7 +375,10 @@ namespace Robot
 
         private void Update()
         {
-            if (SendTrackingData)
+            _cachedAppFocus = Application.isFocused;
+            _cachedActiveInputDevice = (int)PXR_HandTracking.GetActiveInputDevice();
+
+            if (SendTrackingData && !ShouldSendEnterpriseTrackingDirectly())
             {
                 if (_sendTrackingMsg.Count < 2)
                 {
@@ -409,6 +459,232 @@ namespace Robot
         }
 
 
+        private void OnTrackingThread()
+        {
+            while (_state != SocketState.DESTROY)
+            {
+                if (!IsEnterpriseDirectTrackingReady())
+                {
+                    LogEnterpriseDirectTrackingGateIfChanged();
+                    ResetDirectTrackingCache();
+                    Thread.Sleep(GetClampedSleepMs(trackingThreadIdleSleepMs));
+                    continue;
+                }
+
+                if (_pendingDirectTrackingPackets >= 2)
+                {
+                    Thread.Sleep(GetClampedSleepMs(trackingThreadQueueBackpressureSleepMs));
+                    continue;
+                }
+
+                JsonData trackingValue = new JsonData();
+                bool hasNewTrackingSample = false;
+                long headSampleSeq = _lastDirectTrackingHeadSampleSeq;
+                long controllerSampleSeq = _lastDirectTrackingControllerSampleSeq;
+
+                LogEnterpriseDirectTrackingGateIfChanged();
+                if (TrackingData.HeadOn)
+                {
+                    if (!EnterpriseCollectionRecorder.TryGetLatestEnterpriseHeadForTcp(
+                            out string pose,
+                            out int status,
+                            out headSampleSeq))
+                    {
+                        Thread.Sleep(GetClampedSleepMs(trackingThreadWaitForHeadSleepMs));
+                        continue;
+                    }
+
+                    JsonData head = new JsonData();
+                    head["pose"] = pose;
+                    head["status"] = status;
+                    trackingValue["Head"] = head;
+                    hasNewTrackingSample |= headSampleSeq != _lastDirectTrackingHeadSampleSeq;
+                }
+
+                if (TrackingData.ControllerOn)
+                {
+                    EnterpriseCollectionRecorder.TryGetLatestEnterpriseControllerForTcp(
+                        out EnterpriseCollectionRecorder.EnterpriseControllerTcpPose leftController,
+                        out EnterpriseCollectionRecorder.EnterpriseControllerTcpPose rightController,
+                        out controllerSampleSeq);
+                    if (!IsControllerActiveInput())
+                    {
+                        leftController = EnterpriseCollectionRecorder.CreateInvalidEnterpriseControllerTcpPose();
+                        rightController = EnterpriseCollectionRecorder.CreateInvalidEnterpriseControllerTcpPose();
+                    }
+
+                    JsonData controller = BuildEnterpriseControllerJson(leftController, rightController);
+                    trackingValue["Controller"] = controller;
+                    LogEnterpriseControllerPayloadIfNeeded(controller, controllerSampleSeq);
+                    hasNewTrackingSample |= controllerSampleSeq != _lastDirectTrackingControllerSampleSeq;
+                }
+
+                if (!hasNewTrackingSample)
+                {
+                    Thread.Yield();
+                    continue;
+                }
+
+                JsonData appState = new JsonData();
+                trackingValue["timeStampNs"] = Utils.GetCurrentTimestamp();
+                appState["focus"] = _cachedAppFocus;
+                trackingValue["appState"] = appState;
+                trackingValue["Input"] = _cachedActiveInputDevice;
+
+                JsonData sendJson = new JsonData();
+                sendJson["functionName"] = "Tracking";
+                sendJson["value"] = trackingValue.ToJson();
+
+                _sendDatas.Enqueue(new SendData(
+                    NetCMD.PACKET_CCMD_TO_CONTROLLER_FUNCTION,
+                    Encoding.UTF8.GetBytes(sendJson.ToJson()),
+                    true));
+                Interlocked.Increment(ref _pendingDirectTrackingPackets);
+                _lastDirectTrackingHeadSampleSeq = headSampleSeq;
+                _lastDirectTrackingControllerSampleSeq = controllerSampleSeq;
+            }
+        }
+
+        private bool ShouldSendEnterpriseTrackingDirectly()
+        {
+            return SendTrackingData &&
+                   EnterpriseDirectTrackingEnabled &&
+                   TrackingDataSourceCtrl.UseEnterpriseSDK &&
+                   (TrackingData.HeadOn || TrackingData.ControllerOn);
+        }
+
+        private static JsonData BuildEnterpriseControllerJson(
+            EnterpriseCollectionRecorder.EnterpriseControllerTcpPose left,
+            EnterpriseCollectionRecorder.EnterpriseControllerTcpPose right)
+        {
+            JsonData controller = new JsonData();
+            controller["left"] = BuildEnterpriseControllerSideJson(left);
+            controller["right"] = BuildEnterpriseControllerSideJson(right);
+            return controller;
+        }
+
+        private static JsonData BuildEnterpriseControllerSideJson(
+            EnterpriseCollectionRecorder.EnterpriseControllerTcpPose pose)
+        {
+            JsonData json = new JsonData();
+            json["axisX"] = 0.0;
+            json["axisY"] = 0.0;
+            json["axisClick"] = false;
+            json["grip"] = 0.0;
+            json["trigger"] = 0.0;
+            json["primaryButton"] = false;
+            json["secondaryButton"] = false;
+            json["menuButton"] = false;
+            json["hasPose"] = pose.HasPose;
+            json["pose"] = string.IsNullOrEmpty(pose.Pose)
+                ? EnterpriseCollectionRecorder.InvalidControllerPose
+                : pose.Pose;
+            json["status"] = (double)pose.Status;
+            json["timeStampNs"] = (double)pose.TimeStampNs;
+            json["type"] = (double)pose.Type;
+            json["poseError"] = (double)pose.PoseError;
+
+            return json;
+        }
+
+        private bool IsControllerActiveInput()
+        {
+            return _cachedActiveInputDevice == (int)ActiveInputDevice.ControllerActive;
+        }
+
+        private void LogEnterpriseControllerPayloadIfNeeded(JsonData controller, long sampleSeq)
+        {
+            if (!outputEnterpriseControllerPayloadToLog)
+            {
+                return;
+            }
+
+            long nowTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            double elapsedSeconds = (nowTicks - _lastEnterpriseControllerPayloadLogTicks) /
+                                    (double)System.Diagnostics.Stopwatch.Frequency;
+            float intervalSeconds = Mathf.Max(0.1f, enterpriseControllerPayloadLogIntervalSeconds);
+            if (_lastEnterpriseControllerPayloadLogTicks != 0 && elapsedSeconds < intervalSeconds)
+            {
+                return;
+            }
+
+            _lastEnterpriseControllerPayloadLogTicks = nowTicks;
+            string schemaMessage =
+                "TCP enterprise controller schema: " +
+                "axisX=double axisY=double axisClick=bool grip=double trigger=double " +
+                "primaryButton=bool secondaryButton=bool menuButton=bool hasPose=bool pose=string " +
+                "status=double timeStampNs=double type=double poseError=double";
+            string payloadMessage =
+                $"TCP enterprise controller payload: sampleSeq={sampleSeq} json={controller.ToJson()}";
+            Debug.Log($"{Tag}{schemaMessage}");
+            Debug.Log($"{Tag}{payloadMessage}");
+        }
+
+        private bool IsEnterpriseDirectTrackingReady()
+        {
+            return ShouldSendEnterpriseTrackingDirectly() && _state == SocketState.WORKING && _connectInited;
+        }
+
+        private void LogEnterpriseDirectTrackingGateIfChanged()
+        {
+            string status = $"ready={IsEnterpriseDirectTrackingReady()} send={SendTrackingData} " +
+                            $"directEnabled={EnterpriseDirectTrackingEnabled} " +
+                            $"source={TrackingDataSourceCtrl.CurrentSource} " +
+                            $"head={TrackingData.HeadOn} controller={TrackingData.ControllerOn} " +
+                            $"hand={TrackingData.HandTrackingOn} trackingType={TrackingData.TrackingTypeValue} " +
+                            $"state={_state} connectInited={_connectInited}";
+            if (status == _lastDirectTrackingGateStatus)
+            {
+                return;
+            }
+
+            _lastDirectTrackingGateStatus = status;
+            string message = $"TCP enterprise direct gate changed: {status}";
+            LogWindow.Info(message);
+            Debug.Log($"{Tag}{message}");
+        }
+
+        private void ResetDirectTrackingCache()
+        {
+            _lastDirectTrackingHeadSampleSeq = 0;
+            _lastDirectTrackingControllerSampleSeq = 0;
+        }
+
+        private static int GetClampedSleepMs(int sleepMs)
+        {
+            return Mathf.Max(0, sleepMs);
+        }
+
+        private void RecordTrackingPacketSent(string mode)
+        {
+            _trackingPacketsSentInWindow++;
+            _lastTrackingSendMode = mode;
+            LogTrackingRateIfNeeded();
+        }
+
+        private void LogTrackingRateIfNeeded()
+        {
+            float intervalSeconds = Mathf.Max(0.1f, trackingRateLogIntervalSeconds);
+            double elapsedSeconds = _trackingRateStopwatch.Elapsed.TotalSeconds;
+            if (elapsedSeconds < intervalSeconds)
+            {
+                return;
+            }
+
+            double sendHz = elapsedSeconds > 0 ? _trackingPacketsSentInWindow / elapsedSeconds : 0;
+            string rateMessage =
+                $"TCP tracking send rate: {sendHz:F1}Hz mode={_lastTrackingSendMode} pending={_pendingDirectTrackingPackets}";
+            if (outputTrackingRateToLogWindow)
+            {
+                LogWindow.Info(rateMessage);
+            }
+
+            Debug.Log($"{Tag}{rateMessage}");
+            _trackingPacketsSentInWindow = 0;
+            _trackingRateStopwatch.Restart();
+        }
+
+
         private void OnSendThread()
         {
             while (_state != SocketState.DESTROY)
@@ -429,6 +705,11 @@ namespace Robot
                             //Sending general messages
                             while (_sendDatas.TryDequeue(out SendData sendData))
                             {
+                                if (sendData.IsDirectTracking)
+                                {
+                                    Interlocked.Decrement(ref _pendingDirectTrackingPackets);
+                                }
+
                                 byte[] data = PackageHandle.Pack(sendData.Cmd, sendData.Content);
 
                                 int totalBytes = data.Length;
@@ -462,10 +743,15 @@ namespace Robot
                                     Close();
                                     break;
                                 }
+
+                                if (sendData.IsDirectTracking)
+                                {
+                                    RecordTrackingPacketSent("enterprise_direct");
+                                }
                             }
 
                             //Tracking data transmission
-                            if (_connectInited && SendTrackingData)
+                            if (_connectInited && SendTrackingData && !ShouldSendEnterpriseTrackingDirectly())
                             {
                                 if (_sendTrackingMsg.Count > 0)
                                 {
@@ -493,11 +779,20 @@ namespace Robot
                                         Close();
                                         continue;
                                     }
+
+                                    RecordTrackingPacketSent("legacy");
                                 }
                             }
                             else
                             {
-                                Thread.Sleep(14);
+                                if (ShouldSendEnterpriseTrackingDirectly())
+                                {
+                                    Thread.Yield();
+                                }
+                                else
+                                {
+                                    Thread.Sleep(14);
+                                }
                             }
                         }
                         else
@@ -538,6 +833,8 @@ namespace Robot
                 _state = finalState;
             }
 
+            ResetDirectTrackingCache();
+            Interlocked.Exchange(ref _pendingDirectTrackingPackets, 0);
             CloseSocket(socket);
             ClearReceivePackages();
         }
@@ -668,11 +965,13 @@ namespace Robot
         {
             public byte Cmd;
             public byte[] Content;
+            public bool IsDirectTracking;
 
-            public SendData(byte cmd, byte[] content)
+            public SendData(byte cmd, byte[] content, bool isDirectTracking = false)
             {
                 Cmd = cmd;
                 Content = content;
+                IsDirectTracking = isDirectTracking;
             }
         }
     }

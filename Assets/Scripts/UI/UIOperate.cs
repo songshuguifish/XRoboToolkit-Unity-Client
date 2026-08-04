@@ -41,6 +41,12 @@ public class UIOperate : MonoBehaviour
 
     public Dropdown videoSourceDropdown;
 
+    // Android needs a moment to bring the tether interface up and assign an IPv4 after
+    // the enterprise switch flips, so re-check a few times before giving up.
+    private const float TetheringSettleSeconds = 2.0f;
+    private const int TetheringEnableAttempts = 3;
+    private int _tetheringEnableAttempts;
+
     // Start is called before the first frame update
     private void Awake()
     {
@@ -65,8 +71,6 @@ public class UIOperate : MonoBehaviour
         ReconnectBtn.onClick.AddListener(OnReconnectBtn);
         //The shared network function is only available on B-end devices.
         NetshareTog.gameObject.SetActive(false);
-        // Bypass getting sn via enterprise service to enable data transport
-        SetDeviceSN("TestDevice");
         bool intEnterprise = PXR_Enterprise.InitEnterpriseService();
         Debug.Log("---InitEnterpriseService :" + intEnterprise);
         PXR_Enterprise.BindEnterpriseService(OnBindEnterpriseService);
@@ -122,7 +126,7 @@ public class UIOperate : MonoBehaviour
         if (!EnterpriseConnectionSettings.TryNormalizeIpv4(ip, out string normalized) ||
             !EnterpriseConnectionSettings.IsConnectionAddressAllowed(normalized))
         {
-            Toast.Show("Use the PICO USB host address (192.168.245.x)");
+            Toast.Show($"Use the PICO USB host address ({EnterpriseConnectionSettings.DescribeAllowedEndpoints()})");
             return;
         }
 
@@ -152,6 +156,7 @@ public class UIOperate : MonoBehaviour
     private void OnBindEnterpriseService(bool bind)
     {
         Debug.Log("OnBindEnterpriseService " + bind);
+        EnterpriseCollectionRecorder.NotifyEnterpriseServiceBound(bind);
         if (!bind)
             return;
 
@@ -175,42 +180,72 @@ public class UIOperate : MonoBehaviour
     {
         Debug.Log("OnNetShareTog:" + ison);
         EnterpriseConnectionSettings.AutoEnableUsbTethering = ison;
-        PXR_Enterprise.SwitchSystemFunction(
-            SystemFunctionSwitchEnum.SFS_USB_TETHERING,
-            ison ? SwitchEnum.S_ON : SwitchEnum.S_OFF);
-        StartCoroutine(RefreshUsbTetheringStatusAfterDelay(0.75f));
+        _tetheringEnableAttempts = 0;
+        TrySwitchUsbTethering(ison);
+        StartCoroutine(RefreshUsbTetheringStatusAfterDelay(TetheringSettleSeconds));
     }
 
+    /// <summary>
+    /// Reflects USB tethering state in the UI and, when asked, enables it.
+    ///
+    /// State is read from the tether interface itself rather than from
+    /// <c>PXR_Enterprise.GetSwitchSystemFunctionStatus</c>: on SDK 3.1.2 that call throws
+    /// <c>NoSuchMethodError</c> for <c>pbsGetSwitchSystemFunctionStatus</c>, and when it
+    /// does not throw its callback never fires. Gating auto-enable on it made the whole
+    /// auto-enable path dead code, so tethering had to be switched on by hand every
+    /// launch. The setter (<c>pbsSwitchSystemFunction</c>) is a different method and does
+    /// work.
+    /// </summary>
     private void RefreshUsbTetheringStatus(bool applyAutoEnable)
     {
-        PXR_Enterprise.GetSwitchSystemFunctionStatus(
-            SystemFunctionSwitchEnum.SFS_USB_TETHERING,
-            value =>
-            {
-                bool enabled = value == 1;
-                Debug.Log("SFS_USB_TETHERING:" + value);
-                if (applyAutoEnable &&
-                    EnterpriseConnectionSettings.AutoEnableUsbTethering &&
-                    !enabled)
-                {
-                    Debug.Log("PICO Enterprise: automatically enabling USB tethering");
-                    LogWindow.Info("Enabling PICO Enterprise USB tethering");
-                    PXR_Enterprise.SwitchSystemFunction(
-                        SystemFunctionSwitchEnum.SFS_USB_TETHERING,
-                        SwitchEnum.S_ON);
-                    NetshareTog.SetIsOnWithoutNotify(true);
-                    StartCoroutine(RefreshUsbTetheringStatusAfterDelay(0.75f));
-                    return;
-                }
+        bool linkUp = !string.IsNullOrEmpty(EnterpriseUsbDiscovery.UsbSubnetToken);
+        NetshareTog.SetIsOnWithoutNotify(linkUp);
 
-                NetshareTog.SetIsOnWithoutNotify(enabled);
-            });
+        if (linkUp)
+        {
+            _tetheringEnableAttempts = 0;
+            return;
+        }
+
+        if (!applyAutoEnable || !EnterpriseConnectionSettings.AutoEnableUsbTethering)
+            return;
+
+        if (_tetheringEnableAttempts >= TetheringEnableAttempts)
+        {
+            LogWindow.Warn("USB tethering did not come up; enable it in PICO settings");
+            return;
+        }
+
+        _tetheringEnableAttempts++;
+        Debug.Log($"PICO Enterprise: automatically enabling USB tethering " +
+                  $"(attempt {_tetheringEnableAttempts}/{TetheringEnableAttempts})");
+        LogWindow.Info("Enabling PICO Enterprise USB tethering");
+        TrySwitchUsbTethering(true);
+        NetshareTog.SetIsOnWithoutNotify(true);
+        StartCoroutine(RefreshUsbTetheringStatusAfterDelay(TetheringSettleSeconds));
+    }
+
+    private void TrySwitchUsbTethering(bool on)
+    {
+        try
+        {
+            PXR_Enterprise.SwitchSystemFunction(
+                SystemFunctionSwitchEnum.SFS_USB_TETHERING,
+                on ? SwitchEnum.S_ON : SwitchEnum.S_OFF);
+        }
+        catch (System.Exception e)
+        {
+            // Never let a ToB service mismatch abort the caller's remaining setup.
+            Debug.LogWarning(
+                $"PICO Enterprise: USB tethering switch failed: {e.GetType().Name}: {e.Message}");
+            LogWindow.Warn("USB tethering switch failed; enable it in PICO settings");
+        }
     }
 
     private IEnumerator RefreshUsbTetheringStatusAfterDelay(float delaySeconds)
     {
         yield return new WaitForSecondsRealtime(delaySeconds);
-        RefreshUsbTetheringStatus(false);
+        RefreshUsbTetheringStatus(true);
     }
 
     public void OnQuit()

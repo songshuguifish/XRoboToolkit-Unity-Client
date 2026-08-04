@@ -39,7 +39,7 @@ public class IpInputDialog : MonoBehaviour
         if (!EnterpriseConnectionSettings.TryNormalizeIpv4(currentAddress, out string normalized) ||
             !EnterpriseConnectionSettings.IsConnectionAddressAllowed(normalized))
         {
-            normalized = EnterpriseConnectionSettings.UsbHostIp;
+            normalized = EnterpriseConnectionSettings.PreferredHostIp;
         }
 
         TmpInput.SetTextWithoutNotify(normalized);
@@ -61,7 +61,8 @@ public class IpInputDialog : MonoBehaviour
         if (!EnterpriseConnectionSettings.IsConnectionAddressAllowed(ip))
         {
             SetRemind(LogType.Error,
-                "Use the PICO USB host address (192.168.245.x). Wi-Fi is disabled.");
+                $"Use the PICO USB host address ({EnterpriseConnectionSettings.DescribeAllowedEndpoints()}). " +
+                "Wi-Fi is disabled.");
             return;
         }
 

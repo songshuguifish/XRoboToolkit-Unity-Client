@@ -22,6 +22,7 @@ namespace Robot
         private float _nextConnectAttempt;
         private string _automaticAttemptAddress;
         private string _lastConnectedAddress;
+        private string _usbSubnetToken;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void Bootstrap()
@@ -57,9 +58,49 @@ namespace Robot
             {
                 FindSceneComponents();
                 EnableCollectionStreams();
+                // Keep discovery running independently of the candidate list. Driving it
+                // only from ReloadCandidates() meant that once any candidate connected,
+                // discovery never ran again — so a remembered address hid the fact that
+                // discovery had never actually succeeded. Stop once the link is up: the
+                // endpoint is known, and sweeping on would just churn the PC's log.
+                if (_tcpHandler == null || _tcpHandler.State != SocketState.WORKING)
+                    EnterpriseUsbDiscovery.RequestRefresh();
+                WatchUsbLinkChanges();
                 EnsureConnected();
                 yield return new WaitForSecondsRealtime(MonitorIntervalS);
             }
+        }
+
+        /// <summary>
+        /// Re-evaluates candidates when the USB link appears, disappears, or moves to a
+        /// different subnet. Remembered addresses from the previous link are meaningless
+        /// on the new one, and the new one may need a fresh discovery sweep.
+        /// </summary>
+        private void WatchUsbLinkChanges()
+        {
+            string token = EnterpriseUsbDiscovery.UsbSubnetToken;
+            if (_usbSubnetToken == null)
+            {
+                // First observation: record it without reporting a change. Candidates are
+                // still empty at this point and get loaded through the normal path.
+                _usbSubnetToken = token;
+                return;
+            }
+
+            if (string.Equals(token, _usbSubnetToken))
+                return;
+
+            string previous = string.IsNullOrEmpty(_usbSubnetToken) ? "none" : _usbSubnetToken;
+            string current = string.IsNullOrEmpty(token) ? "none" : token;
+            _usbSubnetToken = token;
+
+            Debug.Log($"PICO enterprise USB link changed: {previous} -> {current}; " +
+                      "reloading connection candidates");
+
+            _candidates.Clear();
+            _candidateIndex = 0;
+            _automaticAttemptAddress = null;
+            _nextConnectAttempt = 0.0f;
         }
 
         private void FindSceneComponents()
