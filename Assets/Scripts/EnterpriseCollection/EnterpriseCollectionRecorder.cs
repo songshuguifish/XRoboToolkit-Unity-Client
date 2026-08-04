@@ -32,6 +32,9 @@ namespace Robot
         private static EnterpriseControllerTcpPose s_latestEnterpriseLeftController;
         private static EnterpriseControllerTcpPose s_latestEnterpriseRightController;
         private static long s_latestEnterpriseControllerSampleSeq;
+        private static readonly object s_latestInputLock = new object();
+        private static ControllerInputState s_latestLeftInput;
+        private static ControllerInputState s_latestRightInput;
 
         [SerializeField] private bool autoStart = true;
         [SerializeField] private bool enableFileWrite = true;
@@ -43,6 +46,7 @@ namespace Robot
         [SerializeField] private bool useDynamicPredictedDisplayTimeForEnterpriseHead = false;
         [SerializeField] private bool outputSampleRateToLogWindow = false;
         [SerializeField] private float sampleRateLogIntervalSeconds = 1f;
+        [SerializeField] private bool enableButtonControl = true;
 
         private readonly Stopwatch _stopwatch = new Stopwatch();
         private readonly ControllerLogState _unityLeftControllerLog = new ControllerLogState("unity", "left");
@@ -131,6 +135,8 @@ namespace Robot
 
         private void Update()
         {
+            UpdateCachedInput();
+
             if (!_recording)
             {
                 return;
@@ -154,6 +160,57 @@ namespace Robot
             if (collectHeadPose)
             {
                 Enqueue(UnityHeadFile, BuildUnityHeadLine());
+            }
+        }
+
+        private static void UpdateCachedInput()
+        {
+            InputDevice leftDevice = InputDevices.GetDeviceAtXRNode(XRNode.LeftHand);
+            InputDevice rightDevice = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
+
+            ControllerInputState left = ReadInputState(leftDevice);
+            ControllerInputState right = ReadInputState(rightDevice);
+
+            lock (s_latestInputLock)
+            {
+                s_latestLeftInput = left;
+                s_latestRightInput = right;
+            }
+        }
+
+        private static ControllerInputState ReadInputState(InputDevice device)
+        {
+            ControllerInputState state = new ControllerInputState();
+            if (!device.isValid)
+            {
+                return state;
+            }
+
+            device.TryGetFeatureValue(CommonUsages.primary2DAxis, out Vector2 axis2D);
+            device.TryGetFeatureValue(CommonUsages.primary2DAxisClick, out bool axisClick);
+            device.TryGetFeatureValue(CommonUsages.grip, out float grip);
+            device.TryGetFeatureValue(CommonUsages.trigger, out float trigger);
+            device.TryGetFeatureValue(CommonUsages.primaryButton, out bool primaryButton);
+            device.TryGetFeatureValue(CommonUsages.secondaryButton, out bool secondaryButton);
+            device.TryGetFeatureValue(CommonUsages.menuButton, out bool menuButton);
+
+            state.AxisX = axis2D.x;
+            state.AxisY = axis2D.y;
+            state.AxisClick = axisClick;
+            state.Grip = grip;
+            state.Trigger = trigger;
+            state.PrimaryButton = primaryButton;
+            state.SecondaryButton = secondaryButton;
+            state.MenuButton = menuButton;
+            return state;
+        }
+
+        public static void GetLatestInputForTcp(out ControllerInputState left, out ControllerInputState right)
+        {
+            lock (s_latestInputLock)
+            {
+                left = s_latestLeftInput;
+                right = s_latestRightInput;
             }
         }
 
@@ -945,6 +1002,18 @@ namespace Robot
             public long TimeStampNs;
             public int Type;
             public int PoseError;
+        }
+
+        public struct ControllerInputState
+        {
+            public float AxisX;
+            public float AxisY;
+            public bool AxisClick;
+            public float Grip;
+            public float Trigger;
+            public bool PrimaryButton;
+            public bool SecondaryButton;
+            public bool MenuButton;
         }
 
         private struct ControllerInputSnapshot

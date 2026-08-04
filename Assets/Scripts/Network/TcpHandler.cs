@@ -557,24 +557,29 @@ namespace Robot
             EnterpriseCollectionRecorder.EnterpriseControllerTcpPose left,
             EnterpriseCollectionRecorder.EnterpriseControllerTcpPose right)
         {
+            EnterpriseCollectionRecorder.GetLatestInputForTcp(
+                out EnterpriseCollectionRecorder.ControllerInputState leftInput,
+                out EnterpriseCollectionRecorder.ControllerInputState rightInput);
+
             JsonData controller = new JsonData();
-            controller["left"] = BuildEnterpriseControllerSideJson(left);
-            controller["right"] = BuildEnterpriseControllerSideJson(right);
+            controller["left"] = BuildEnterpriseControllerSideJson(left, leftInput);
+            controller["right"] = BuildEnterpriseControllerSideJson(right, rightInput);
             return controller;
         }
 
         private static JsonData BuildEnterpriseControllerSideJson(
-            EnterpriseCollectionRecorder.EnterpriseControllerTcpPose pose)
+            EnterpriseCollectionRecorder.EnterpriseControllerTcpPose pose,
+            EnterpriseCollectionRecorder.ControllerInputState input)
         {
             JsonData json = new JsonData();
-            json["axisX"] = 0.0;
-            json["axisY"] = 0.0;
-            json["axisClick"] = false;
-            json["grip"] = 0.0;
-            json["trigger"] = 0.0;
-            json["primaryButton"] = false;
-            json["secondaryButton"] = false;
-            json["menuButton"] = false;
+            json["axisX"] = (double)input.AxisX;
+            json["axisY"] = (double)input.AxisY;
+            json["axisClick"] = input.AxisClick;
+            json["grip"] = (double)input.Grip;
+            json["trigger"] = (double)input.Trigger;
+            json["primaryButton"] = input.PrimaryButton;
+            json["secondaryButton"] = input.SecondaryButton;
+            json["menuButton"] = input.MenuButton;
             json["hasPose"] = pose.HasPose;
             json["pose"] = string.IsNullOrEmpty(pose.Pose)
                 ? EnterpriseCollectionRecorder.InvalidControllerPose
