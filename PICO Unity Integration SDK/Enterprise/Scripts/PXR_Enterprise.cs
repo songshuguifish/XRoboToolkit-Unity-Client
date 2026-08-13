@@ -394,6 +394,27 @@ namespace Unity.XR.PICO.TOBSupport
         }
 
         /// <summary>
+        /// Controls whether the tracking data exposed by the system includes predictions.
+        /// </summary>
+        /// <param name="enabled">True to enable predicted tracking data; false to disable it.</param>
+        /// <param name="ext">Reserved parameter. Pass 0.</param>
+        /// <returns>0 on success, or a device/service error code. Returns -1 when the service is unavailable.</returns>
+        public static int SetTrackingDataIncludingPredictions(bool enabled, int ext=0)
+        {
+            return PXR_EnterprisePlugin.UPxr_SetTrackingDataIncludingPredictions(enabled, ext);
+        }
+
+        /// <summary>
+        /// Gets whether the tracking data exposed by the system includes predictions.
+        /// </summary>
+        /// <param name="ext">Reserved parameter. Pass 0.</param>
+        /// <returns>1 when enabled, 0 when disabled, or -1 when the service is unavailable.</returns>
+        public static int GetTrackingDataIncludingPredictions(int ext=0)
+        {
+            return PXR_EnterprisePlugin.UPxr_GetTrackingDataIncludingPredictions(ext);
+        }
+
+        /// <summary>
         /// Sets the static IPv4 addresses used by PICO USB tethering.
         /// </summary>
         /// <returns>0 on success, 1 on failure, 101 for equal addresses, or 102 for different /24 subnets.</returns>

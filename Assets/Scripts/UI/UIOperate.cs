@@ -155,6 +155,20 @@ public class UIOperate : MonoBehaviour
     {
         Debug.Log("OnBindEnterpriseService " + bind);
         _enterpriseServiceBound = bind;
+        if (bind)
+        {
+            const int ext = 0;
+            int setResult = PXR_Enterprise.SetTrackingDataIncludingPredictions(false, ext);
+            int enabled = PXR_Enterprise.GetTrackingDataIncludingPredictions(ext);
+            Debug.Log(
+                $"Tracking data including predictions: setResult={setResult}, enabled={enabled}");
+            if (setResult != 0 || enabled != 0)
+            {
+                Debug.LogWarning(
+                    $"Failed to disable tracking data including predictions: setResult={setResult}, enabled={enabled}");
+            }
+        }
+
         EnterpriseCollectionRecorder.NotifyEnterpriseServiceBound(bind);
         if (bind && !_usbNetworkingConfigured)
         {

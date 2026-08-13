@@ -248,6 +248,53 @@ namespace Unity.XR.PICO.TOBSupport
 #endif
         }
 
+        public static int UPxr_SetTrackingDataIncludingPredictions(bool enabled, int ext)
+        {
+#if PICO_PLATFORM
+            if (IToBService == null)
+            {
+                Debug.LogWarning("TOB service binder is not ready; cannot configure predicted tracking data.");
+                return -1;
+            }
+
+            try
+            {
+                return IToBService.Call<int>(
+                    "pbsSetTrackingDataIncludingPredictions", enabled ? 1 : 0, ext);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"pbsSetTrackingDataIncludingPredictions failed: {e}");
+                return -1;
+            }
+#else
+            return -1;
+#endif
+        }
+
+        public static int UPxr_GetTrackingDataIncludingPredictions(int ext)
+        {
+#if PICO_PLATFORM
+            if (IToBService == null)
+            {
+                Debug.LogWarning("TOB service binder is not ready; cannot query predicted tracking data.");
+                return -1;
+            }
+
+            try
+            {
+                return IToBService.Call<int>("pbsGetTrackingDataIncludingPredictions", ext);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"pbsGetTrackingDataIncludingPredictions failed: {e}");
+                return -1;
+            }
+#else
+            return -1;
+#endif
+        }
+
         public static int UPxr_SetUsbTetheringStaticIP(string localAddr, string clientAddr)
         {
             int resultCode = 1;
