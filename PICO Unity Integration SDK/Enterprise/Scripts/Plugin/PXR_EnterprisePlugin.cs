@@ -33,6 +33,9 @@ namespace Unity.XR.PICO.TOBSupport
     public partial class PXR_EnterprisePlugin
     {
         private const string TAG = "[PXR_EnterprisePlugin]";
+        // UPxr_GetControllerTrackingState reports controller linear derivatives with
+        // millimetre-based length units. PoseInfo is the application SI boundary.
+        private const float RuntimeControllerLinearNativeToSi = 0.001f;
         public const int MAX_SIZE = 12208032;
 
         public static string token;
@@ -3364,7 +3367,24 @@ namespace Unity.XR.PICO.TOBSupport
                 rz = sensorState.pose.orientation.z,
                 type = unchecked((int)deviceId),
                 confidence = sensorState.status,
-                poseError = nativeResult
+                poseError = nativeResult,
+                nativeKinematicsValid = true,
+                angularVelocity = new Vector3(
+                    sensorState.angularVelocity.x,
+                    sensorState.angularVelocity.y,
+                    sensorState.angularVelocity.z),
+                linearVelocity = new Vector3(
+                    sensorState.linearVelocity.x,
+                    sensorState.linearVelocity.y,
+                    sensorState.linearVelocity.z) * RuntimeControllerLinearNativeToSi,
+                angularAcceleration = new Vector3(
+                    sensorState.angularAcceleration.x,
+                    sensorState.angularAcceleration.y,
+                    sensorState.angularAcceleration.z),
+                linearAcceleration = new Vector3(
+                    sensorState.linearAcceleration.x,
+                    sensorState.linearAcceleration.y,
+                    sensorState.linearAcceleration.z) * RuntimeControllerLinearNativeToSi
             };
         }
 #endif
@@ -3429,6 +3449,85 @@ namespace Unity.XR.PICO.TOBSupport
             }
         }
 
+        private static bool TryGetBridgeControllerImu(long predictTime,
+            out ControllerImuData[] imuData, out string error)
+        {
+            imuData = null;
+            error = null;
+
+            try
+            {
+                using (AndroidJavaClass bridgeClass =
+                       new AndroidJavaClass("com.xrobotoolkit.enterprise.EnterprisePoseBridge"))
+                {
+                    double[] packed = bridgeClass.CallStatic<double[]>(
+                        "getControllerImuPacked", predictTime);
+                    if (TryConvertPackedControllerImu(packed, out imuData))
+                    {
+                        return true;
+                    }
+
+                    error = "bridge controller IMU returned no packed samples";
+                    return false;
+                }
+            }
+            catch (Exception e)
+            {
+                ClearPendingJavaException();
+                error = "bridge controller IMU exception: " + e.GetType().Name + ": " + e.Message;
+                return false;
+            }
+        }
+
+        private static bool TryConvertPackedControllerImu(double[] packed,
+            out ControllerImuData[] imuData)
+        {
+            const int fieldsPerController = 14;
+            imuData = null;
+            if (packed == null || packed.Length < 1)
+            {
+                return false;
+            }
+
+            int count = Math.Min(2, Math.Max(0, (int)packed[0]));
+            if (count == 0 || packed.Length < 1 + count * fieldsPerController)
+            {
+                return false;
+            }
+
+            ControllerImuData[] result = new ControllerImuData[count];
+            bool hasSample = false;
+            for (int i = 0; i < count; i++)
+            {
+                int offset = 1 + i * fieldsPerController;
+                if (packed[offset] < 0.5)
+                {
+                    continue;
+                }
+
+                result[i] = new ControllerImuData
+                {
+                    timestamp = checked((long)packed[offset + 1]),
+                    vx = packed[offset + 2],
+                    vy = packed[offset + 3],
+                    vz = packed[offset + 4],
+                    ax = packed[offset + 5],
+                    ay = packed[offset + 6],
+                    az = packed[offset + 7],
+                    wx = packed[offset + 8],
+                    wy = packed[offset + 9],
+                    wz = packed[offset + 10],
+                    w_ax = packed[offset + 11],
+                    w_ay = packed[offset + 12],
+                    w_az = packed[offset + 13]
+                };
+                hasSample = true;
+            }
+
+            imuData = hasSample ? result : null;
+            return hasSample;
+        }
+
         private static void ClearPendingJavaException()
         {
             IntPtr exception = AndroidJNI.ExceptionOccurred();
@@ -3488,6 +3587,46 @@ namespace Unity.XR.PICO.TOBSupport
             }
 
             return poseInfos;
+        }
+
+        private static ControllerImuData ConvertBridgeImu(JsonData imu)
+        {
+            if (imu == null || !imu.IsObject)
+            {
+                return null;
+            }
+
+            return new ControllerImuData
+            {
+                timestamp = GetJsonLong(imu, "timestamp"),
+                vx = GetJsonDouble(imu, "vx"),
+                vy = GetJsonDouble(imu, "vy"),
+                vz = GetJsonDouble(imu, "vz"),
+                ax = GetJsonDouble(imu, "ax"),
+                ay = GetJsonDouble(imu, "ay"),
+                az = GetJsonDouble(imu, "az"),
+                wx = GetJsonDouble(imu, "wx"),
+                wy = GetJsonDouble(imu, "wy"),
+                wz = GetJsonDouble(imu, "wz"),
+                w_ax = GetJsonDouble(imu, "w_ax"),
+                w_ay = GetJsonDouble(imu, "w_ay"),
+                w_az = GetJsonDouble(imu, "w_az")
+            };
+        }
+
+        private static ControllerImuData[] ConvertBridgeImuArray(JsonData imus)
+        {
+            if (imus == null || !imus.IsArray)
+            {
+                return null;
+            }
+
+            ControllerImuData[] result = new ControllerImuData[imus.Count];
+            for (int i = 0; i < imus.Count; i++)
+            {
+                result[i] = ConvertBridgeImu(imus[i]);
+            }
+            return result;
         }
 
         private static long GetJsonLong(JsonData data, string key)
@@ -3775,6 +3914,30 @@ namespace Unity.XR.PICO.TOBSupport
             }
 #endif
             return null;
+        }
+
+        public static ControllerImuData[] GetControllerImuData(long predictTime)
+        {
+#if PICO_PLATFORM
+            // The owning worker attaches once. A local frame bounds every temporary JNI
+            // reference made while reflecting through the TobService Binder.
+            bool pushedLocalFrame = AndroidJNI.PushLocalFrame(32) == 0;
+            try
+            {
+                return TryGetBridgeControllerImu(predictTime, out ControllerImuData[] imuData, out _)
+                    ? imuData
+                    : null;
+            }
+            finally
+            {
+                if (pushedLocalFrame)
+                {
+                    AndroidJNI.PopLocalFrame(IntPtr.Zero);
+                }
+            }
+#else
+            return null;
+#endif
         }
     }
    

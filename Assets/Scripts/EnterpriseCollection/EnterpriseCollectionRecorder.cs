@@ -20,24 +20,40 @@ namespace Robot
         private const string UnityHeadFile = "unity_head.jsonl";
         private const string UnityControllerFile = "unity_controller_pose.jsonl";
         private const double MaxValidEnterpriseControllerPositionMeters = 10.0;
+        private const int ProductionEnterpriseSampleHz = 800;
+        // This Binder API returns a latest/predicted kinematics snapshot rather than a raw
+        // sensor callback. Poll above the controller tracking rate without starving the
+        // production 800 Hz raw pose path; source timestamp deduplication preserves truth.
+        private const int TobControllerImuSampleHz = 250;
+        // v2 guarantees that every serialized derivative uses the SI unit named by its field.
+        private const int NativeKinematicsSchemaVersion = 2;
+        // TobService does not document units for IMUData scalar fields. Schema v1 therefore
+        // preserves the exact vendor values under explicit *_native field names.
+        private const int TobControllerImuSchemaVersion = 1;
         public const string InvalidControllerPose = "0,0,0,0,0,0,1";
         private static bool s_enterpriseServiceBound;
         private static readonly object s_latestEnterpriseHeadLock = new object();
         private static bool s_hasLatestEnterpriseHead;
-        private static string s_latestEnterpriseHeadPose;
-        private static int s_latestEnterpriseHeadStatus;
+        private static EnterpriseHeadTcpPose s_latestEnterpriseHead;
         private static long s_latestEnterpriseHeadSampleSeq;
         private static readonly object s_latestEnterpriseControllerLock = new object();
         private static bool s_hasLatestEnterpriseController;
         private static EnterpriseControllerTcpPose s_latestEnterpriseLeftController;
         private static EnterpriseControllerTcpPose s_latestEnterpriseRightController;
         private static long s_latestEnterpriseControllerSampleSeq;
+        private static readonly object s_latestTobControllerImuLock = new object();
+        private static ControllerImuData[] s_latestTobControllerImu;
 
         [SerializeField] private bool autoStart = true;
-        [SerializeField] private bool enableFileWrite = true;
+        // MCAP over TCP is the production recording path. The local JSONL stream is only a
+        // diagnostic option; serializing two extra documents at 800 Hz makes IL2CPP's native
+        // managed heap grow aggressively even after the writer has reached its time limit.
+        [SerializeField] private bool enableFileWrite = false;
         [SerializeField] private bool collectHeadPose = true;
         [SerializeField] private bool collectControllerPose = true;
-        [SerializeField] private int enterpriseSampleHz = 100;
+        // Applied again during Awake so a stale serialized or manually adjusted value cannot
+        // carry into the next production app launch.
+        [SerializeField] private int enterpriseSampleHz = ProductionEnterpriseSampleHz;
         [SerializeField] private int unitySampleHz = 90;
         [SerializeField] private int maxRecordSeconds = 100;
         [SerializeField] private bool useDynamicPredictedDisplayTimeForEnterpriseHead = false;
@@ -51,6 +67,7 @@ namespace Robot
         private readonly ControllerLogState _enterpriseRightControllerLog = new ControllerLogState("enterprise", "right");
 
         private Thread _enterpriseThread;
+        private Thread _controllerImuThread;
         private EnterpriseCollectionFileWriter _fileWriter;
         private volatile bool _recording;
         private long _enterpriseHeadSeq;
@@ -74,6 +91,12 @@ namespace Robot
             GameObject recorder = new GameObject(nameof(EnterpriseCollectionRecorder));
             DontDestroyOnLoad(recorder);
             recorder.AddComponent<EnterpriseCollectionRecorder>();
+        }
+
+        private void Awake()
+        {
+            Volatile.Write(ref enterpriseSampleHz, ProductionEnterpriseSampleHz);
+            Debug.Log($"{Tag} production enterprise sample hz initialized to {ProductionEnterpriseSampleHz}");
         }
 
         private void Start()
@@ -101,6 +124,7 @@ namespace Robot
             {
                 ClearLatestEnterpriseHead();
                 ClearLatestEnterpriseController();
+                ClearLatestTobControllerImu();
             }
 
             EnterpriseCollectionRecorder recorder = FindObjectOfType<EnterpriseCollectionRecorder>();
@@ -139,7 +163,10 @@ namespace Robot
 
             if (collectHeadPose)
             {
-                Enqueue(UnityHeadFile, BuildUnityHeadLine());
+                if (IsFileWriterAccepting)
+                {
+                    Enqueue(UnityHeadFile, BuildUnityHeadLine());
+                }
             }
         }
 
@@ -180,6 +207,7 @@ namespace Robot
             _lastEnterpriseHeadSampleTicks = 0;
             _lastEnterpriseRateLogTicks = Stopwatch.GetTimestamp();
             _recordTimeLimitReached = false;
+            ClearLatestTobControllerImu();
 
             _enterpriseThread = new Thread(EnterpriseLoop)
             {
@@ -187,6 +215,13 @@ namespace Robot
                 Name = "EnterpriseCollection"
             };
             _enterpriseThread.Start();
+
+            _controllerImuThread = new Thread(ControllerImuLoop)
+            {
+                IsBackground = true,
+                Name = "TobControllerImu"
+            };
+            _controllerImuThread.Start();
 
             Debug.Log($"{Tag} started: {_fileWriter.RecordDir}, enableFileWrite={enableFileWrite}, " +
                 $"collectHeadPose={collectHeadPose}, collectControllerPose={collectControllerPose}");
@@ -225,6 +260,9 @@ namespace Robot
             Stopwatch stageProfile = Stopwatch.StartNew();
             _enterpriseThread?.Join(1000);
             long enterpriseJoinMs = stageProfile.ElapsedMilliseconds;
+            stageProfile.Restart();
+            _controllerImuThread?.Join(1000);
+            long controllerImuJoinMs = stageProfile.ElapsedMilliseconds;
 
             EnterpriseCollectionFileWriter.StopStats writerStats = _fileWriter != null
                 ? _fileWriter.Stop(2000)
@@ -235,10 +273,12 @@ namespace Robot
             _stopwatch.Stop();
             ClearLatestEnterpriseHead();
             ClearLatestEnterpriseController();
+            ClearLatestTobControllerImu();
             stopProfile.Stop();
             Debug.Log($"{Tag} stopped: {recordDir}");
             Debug.Log($"{Tag} stop profile: totalMs={stopProfile.ElapsedMilliseconds}, " +
                 $"enterpriseJoinMs={enterpriseJoinMs}, writerJoinMs={writerStats.WriterJoinMs}, " +
+                $"controllerImuJoinMs={controllerImuJoinMs}, " +
                 $"closeWritersMs={writerStats.CloseWritersMs}, " +
                 $"pendingBeforeStop={pendingBeforeStop}, pendingAfterStop={writerStats.PendingAfterStop}, " +
                 $"enterpriseThreadAlive={(_enterpriseThread != null && _enterpriseThread.IsAlive)}, " +
@@ -268,50 +308,119 @@ namespace Robot
 #if PICO_PLATFORM
             AndroidJNI.AttachCurrentThread();
 #endif
-
-            long nextSampleTicks = Stopwatch.GetTimestamp();
-            while (_recording)
+            try
             {
-                int sampleHz = EnterpriseSampleHz;
-                if (sampleHz <= 0)
+                long nextSampleTicks = Stopwatch.GetTimestamp();
+                while (_recording)
                 {
-                    Thread.Sleep(100);
-                    nextSampleTicks = Stopwatch.GetTimestamp();
-                    continue;
-                }
-
-                if (collectHeadPose)
-                {
-                    Enqueue(EnterpriseHeadFile, BuildEnterpriseHeadLine());
-                }
-
-                if (collectControllerPose)
-                {
-                    Enqueue(EnterpriseControllerFile, BuildEnterpriseControllerLine());
-                }
-
-                LogEnterpriseSampleRateIfNeeded();
-
-                long intervalTicks = Math.Max(1, (long)Math.Round(Stopwatch.Frequency / (double)sampleHz));
-                nextSampleTicks += intervalTicks;
-                long remainingTicks = nextSampleTicks - Stopwatch.GetTimestamp();
-                if (remainingTicks > 0)
-                {
-                    int sleepMs = (int)(remainingTicks * 1000 / Stopwatch.Frequency);
-                    if (sleepMs > 0)
+                    int sampleHz = EnterpriseSampleHz;
+                    if (sampleHz <= 0)
                     {
-                        Thread.Sleep(sleepMs);
+                        Thread.Sleep(100);
+                        nextSampleTicks = Stopwatch.GetTimestamp();
+                        continue;
+                    }
+
+                    bool serializeDiagnostics = IsFileWriterAccepting;
+                    if (collectHeadPose)
+                    {
+                        Enqueue(EnterpriseHeadFile, BuildEnterpriseHeadLine(serializeDiagnostics));
+                    }
+
+                    if (collectControllerPose)
+                    {
+                        Enqueue(EnterpriseControllerFile,
+                            BuildEnterpriseControllerLine(serializeDiagnostics));
+                    }
+
+                    LogEnterpriseSampleRateIfNeeded();
+
+                    long intervalTicks = Math.Max(1, (long)Math.Round(Stopwatch.Frequency / (double)sampleHz));
+                    nextSampleTicks += intervalTicks;
+                    long remainingTicks = nextSampleTicks - Stopwatch.GetTimestamp();
+                    if (remainingTicks > 0)
+                    {
+                        int sleepMs = (int)(remainingTicks * 1000 / Stopwatch.Frequency);
+                        if (sleepMs > 0)
+                        {
+                            Thread.Sleep(sleepMs);
+                        }
+                        else
+                        {
+                            Thread.Yield();
+                        }
                     }
                     else
                     {
+                        nextSampleTicks = Stopwatch.GetTimestamp();
                         Thread.Yield();
                     }
                 }
-                else
+            }
+            finally
+            {
+#if PICO_PLATFORM
+                AndroidJNI.DetachCurrentThread();
+#endif
+            }
+        }
+
+        private void ControllerImuLoop()
+        {
+#if PICO_PLATFORM
+            AndroidJNI.AttachCurrentThread();
+#endif
+            try
+            {
+                long nextSampleTicks = Stopwatch.GetTimestamp();
+                while (_recording)
                 {
-                    nextSampleTicks = Stopwatch.GetTimestamp();
-                    Thread.Yield();
+                    const int sampleHz = TobControllerImuSampleHz;
+                    if (!collectControllerPose)
+                    {
+                        Thread.Sleep(100);
+                        nextSampleTicks = Stopwatch.GetTimestamp();
+                        continue;
+                    }
+
+                    ControllerImuData[] controllerImu = PXR_Enterprise.GetControllerImuData(0L);
+                    if (controllerImu != null)
+                    {
+                        lock (s_latestTobControllerImuLock)
+                        {
+                            s_latestTobControllerImu = controllerImu;
+                        }
+                    }
+
+                    long intervalTicks = Math.Max(1, (long)Math.Round(Stopwatch.Frequency / (double)sampleHz));
+                    nextSampleTicks += intervalTicks;
+                    long remainingTicks = nextSampleTicks - Stopwatch.GetTimestamp();
+                    if (remainingTicks > 0)
+                    {
+                        int sleepMs = (int)(remainingTicks * 1000 / Stopwatch.Frequency);
+                        if (sleepMs > 0)
+                        {
+                            Thread.Sleep(sleepMs);
+                        }
+                        else
+                        {
+                            Thread.Yield();
+                        }
+                    }
+                    else
+                    {
+                        nextSampleTicks = Stopwatch.GetTimestamp();
+                        Thread.Yield();
+                    }
                 }
+            }
+            finally
+            {
+#if PICO_PLATFORM
+                // This is our own long-lived worker. Detaching at shutdown prevents a service
+                // rebind/restart from retaining the thread's JNI state and local-reference table.
+                AndroidJNI.DetachCurrentThread();
+#endif
             }
         }
 
@@ -341,12 +450,19 @@ namespace Robot
 
         public static bool TryGetLatestEnterpriseHeadForTcp(out string pose, out int status, out long sampleSeq)
         {
+            bool success = TryGetLatestEnterpriseHeadForTcp(out EnterpriseHeadTcpPose head, out sampleSeq);
+            pose = head.Pose;
+            status = head.Status;
+            return success;
+        }
+
+        public static bool TryGetLatestEnterpriseHeadForTcp(out EnterpriseHeadTcpPose head, out long sampleSeq)
+        {
             lock (s_latestEnterpriseHeadLock)
             {
-                pose = s_latestEnterpriseHeadPose;
-                status = s_latestEnterpriseHeadStatus;
+                head = s_latestEnterpriseHead;
                 sampleSeq = s_latestEnterpriseHeadSampleSeq;
-                return s_hasLatestEnterpriseHead && !string.IsNullOrEmpty(pose);
+                return s_hasLatestEnterpriseHead && head.HasPose && !string.IsNullOrEmpty(head.Pose);
             }
         }
 
@@ -364,7 +480,7 @@ namespace Robot
             }
         }
 
-        private string BuildEnterpriseHeadLine()
+        private string BuildEnterpriseHeadLine(bool serializeDiagnostics)
         {
             try
             {
@@ -376,6 +492,19 @@ namespace Robot
                     ref sensorState,
                     ref sensorFrameIndex);
 
+                if (result == 0)
+                {
+                    Interlocked.Increment(ref _enterpriseHeadSamplesInWindow);
+                    // Publish the native sample before any diagnostic JSON work so
+                    // a serialization failure cannot stall live TCP tracking.
+                    UpdateLatestEnterpriseHead(sensorState);
+                }
+
+                if (!serializeDiagnostics)
+                {
+                    return null;
+                }
+
                 JsonData data = BuildUnityHeadJson(sensorState);
                 data["sensorFrameIndex"] = sensorFrameIndex;
                 data["predictTimeMs"] = predictTimeMs;
@@ -383,18 +512,15 @@ namespace Robot
                     ? "dynamic"
                     : "sample_interval";
                 data["nativeResult"] = result;
-                if (result == 0)
-                {
-                    Interlocked.Increment(ref _enterpriseHeadSamplesInWindow);
-                    UpdateLatestEnterpriseHead(sensorState);
-                }
                 return BuildEnvelope("enterprise", "head", Interlocked.Increment(ref _enterpriseHeadSeq),
                     result == 0, data, null);
             }
             catch (Exception e)
             {
-                return BuildEnvelope("enterprise", "head", Interlocked.Increment(ref _enterpriseHeadSeq),
-                    false, null, e.GetType().Name + ": " + e.Message);
+                return serializeDiagnostics
+                    ? BuildEnvelope("enterprise", "head", Interlocked.Increment(ref _enterpriseHeadSeq),
+                        false, null, e.GetType().Name + ": " + e.Message)
+                    : null;
             }
         }
 
@@ -416,29 +542,40 @@ namespace Robot
             return (nowTicks - previousTicks) * 1000.0 / Stopwatch.Frequency;
         }
 
-        private string BuildEnterpriseControllerLine()
+        private string BuildEnterpriseControllerLine(bool serializeDiagnostics)
         {
             try
             {
                 double predictTimeMs = GetEnterpriseControllerPredictTimeMs();
                 PoseInfo[] poses = PXR_Enterprise.GetControllerPose(predictTimeMs);
-                if (poses != null)
+                ControllerImuData[] controllerImu = GetLatestTobControllerImu();
+                if (poses != null || controllerImu != null)
                 {
                     Interlocked.Increment(ref _enterpriseControllerSamplesInWindow);
-                    UpdateLatestEnterpriseController(poses);
+                    UpdateLatestEnterpriseController(poses, controllerImu);
+                }
+                if (!serializeDiagnostics)
+                {
+                    return null;
                 }
                 JsonData data = new JsonData();
                 data["predictTimeMs"] = predictTimeMs;
                 data["predictTimeMode"] = "latest";
-                data["left"] = BuildEnterpriseControllerSide(poses, 0, _enterpriseLeftControllerLog);
-                data["right"] = BuildEnterpriseControllerSide(poses, 1, _enterpriseRightControllerLog);
+                data["left"] = BuildEnterpriseControllerSide(
+                    poses, controllerImu, 0, _enterpriseLeftControllerLog);
+                data["right"] = BuildEnterpriseControllerSide(
+                    poses, controllerImu, 1, _enterpriseRightControllerLog);
                 return BuildEnvelope("enterprise", "controller_pose",
-                    Interlocked.Increment(ref _enterpriseControllerSeq), poses != null, data, null);
+                    Interlocked.Increment(ref _enterpriseControllerSeq), poses != null || controllerImu != null,
+                    data, null);
             }
             catch (Exception e)
             {
-                return BuildEnvelope("enterprise", "controller_pose",
-                    Interlocked.Increment(ref _enterpriseControllerSeq), false, null, e.GetType().Name + ": " + e.Message);
+                return serializeDiagnostics
+                    ? BuildEnvelope("enterprise", "controller_pose",
+                        Interlocked.Increment(ref _enterpriseControllerSeq), false, null,
+                        e.GetType().Name + ": " + e.Message)
+                    : null;
             }
         }
 
@@ -486,7 +623,8 @@ namespace Robot
             }
         }
 
-        private JsonData BuildEnterpriseControllerSide(PoseInfo[] poses, int index, ControllerLogState logState)
+        private JsonData BuildEnterpriseControllerSide(PoseInfo[] poses, ControllerImuData[] controllerImu,
+            int index, ControllerLogState logState)
         {
             JsonData json = new JsonData();
             PoseInfo poseInfo = poses != null && index >= 0 && index < poses.Length ? poses[index] : null;
@@ -497,6 +635,7 @@ namespace Robot
             {
                 json["pose"] = BuildPoseJson(poseInfo);
             }
+            AppendTobControllerImu(json, CreateTobControllerImu(controllerImu, index));
 
             return json;
         }
@@ -679,17 +818,27 @@ namespace Robot
             JsonData json = new JsonData();
             json["pose"] = GetPoseStr(sensorState.pose.position, sensorState.pose.orientation);
             json["status"] = sensorState.status;
-            json["timeStampNs"] = sensorState.poseTimeStampNs.ToString();
+            long poseTimeStampNs = unchecked((long)sensorState.poseTimeStampNs);
+            json["timeStampNs"] = poseTimeStampNs;
+            json["poseTimeStampNs"] = poseTimeStampNs;
+            AppendNativeKinematics(json, CreateNativePoseKinematics(sensorState));
             return json;
         }
 
         private static void UpdateLatestEnterpriseHead(PxrSensorState2 sensorState)
         {
-            string pose = GetPoseStr(sensorState.pose.position, sensorState.pose.orientation);
+            long poseTimeStampNs = unchecked((long)sensorState.poseTimeStampNs);
+            EnterpriseHeadTcpPose head = new EnterpriseHeadTcpPose
+            {
+                HasPose = true,
+                Pose = GetPoseStr(sensorState.pose.position, sensorState.pose.orientation),
+                Status = sensorState.status,
+                TimeStampNs = poseTimeStampNs,
+                NativeKinematics = CreateNativePoseKinematics(sensorState)
+            };
             lock (s_latestEnterpriseHeadLock)
             {
-                s_latestEnterpriseHeadPose = pose;
-                s_latestEnterpriseHeadStatus = sensorState.status;
+                s_latestEnterpriseHead = head;
                 s_latestEnterpriseHeadSampleSeq++;
                 s_hasLatestEnterpriseHead = true;
             }
@@ -700,22 +849,22 @@ namespace Robot
             lock (s_latestEnterpriseHeadLock)
             {
                 s_hasLatestEnterpriseHead = false;
-                s_latestEnterpriseHeadPose = null;
-                s_latestEnterpriseHeadStatus = 0;
+                s_latestEnterpriseHead = new EnterpriseHeadTcpPose();
                 s_latestEnterpriseHeadSampleSeq = 0;
             }
         }
 
-        private static void UpdateLatestEnterpriseController(PoseInfo[] poses)
+        private static void UpdateLatestEnterpriseController(PoseInfo[] poses, ControllerImuData[] controllerImu)
         {
-            EnterpriseControllerTcpPose left = CreateEnterpriseControllerTcpPose(poses, 0);
-            EnterpriseControllerTcpPose right = CreateEnterpriseControllerTcpPose(poses, 1);
+            EnterpriseControllerTcpPose left = CreateEnterpriseControllerTcpPose(poses, controllerImu, 0);
+            EnterpriseControllerTcpPose right = CreateEnterpriseControllerTcpPose(poses, controllerImu, 1);
             lock (s_latestEnterpriseControllerLock)
             {
                 s_latestEnterpriseLeftController = left;
                 s_latestEnterpriseRightController = right;
                 s_latestEnterpriseControllerSampleSeq++;
-                s_hasLatestEnterpriseController = left.HasPose || right.HasPose;
+                s_hasLatestEnterpriseController = left.HasPose || right.HasPose ||
+                    left.TobControllerImu.Available || right.TobControllerImu.Available;
             }
         }
 
@@ -730,12 +879,32 @@ namespace Robot
             }
         }
 
-        private static EnterpriseControllerTcpPose CreateEnterpriseControllerTcpPose(PoseInfo[] poses, int index)
+        private static ControllerImuData[] GetLatestTobControllerImu()
+        {
+            lock (s_latestTobControllerImuLock)
+            {
+                return s_latestTobControllerImu;
+            }
+        }
+
+        private static void ClearLatestTobControllerImu()
+        {
+            lock (s_latestTobControllerImuLock)
+            {
+                s_latestTobControllerImu = null;
+            }
+        }
+
+        private static EnterpriseControllerTcpPose CreateEnterpriseControllerTcpPose(
+            PoseInfo[] poses, ControllerImuData[] controllerImu, int index)
         {
             PoseInfo poseInfo = poses != null && index >= 0 && index < poses.Length ? poses[index] : null;
+            TobControllerImu tobImu = CreateTobControllerImu(controllerImu, index);
             if (!IsValidEnterpriseControllerPose(poseInfo))
             {
-                return CreateInvalidEnterpriseControllerTcpPose();
+                EnterpriseControllerTcpPose invalid = CreateInvalidEnterpriseControllerTcpPose();
+                invalid.TobControllerImu = tobImu;
+                return invalid;
             }
 
             return new EnterpriseControllerTcpPose
@@ -747,7 +916,42 @@ namespace Robot
                 Status = poseInfo.confidence,
                 TimeStampNs = poseInfo.timestamp,
                 Type = poseInfo.type,
-                PoseError = poseInfo.poseError
+                PoseError = poseInfo.poseError,
+                TobControllerImu = tobImu,
+                NativeKinematics = new NativePoseKinematics
+                {
+                    Available = poseInfo.nativeKinematicsValid,
+                    PoseTimeStampNs = poseInfo.timestamp,
+                    AngularVelocity = poseInfo.angularVelocity,
+                    LinearVelocity = poseInfo.linearVelocity,
+                    AngularAcceleration = poseInfo.angularAcceleration,
+                    LinearAcceleration = poseInfo.linearAcceleration
+                }
+            };
+        }
+
+        private static TobControllerImu CreateTobControllerImu(ControllerImuData[] values, int index)
+        {
+            ControllerImuData value = values != null && index >= 0 && index < values.Length
+                ? values[index]
+                : null;
+            if (value == null ||
+                !IsFinite(value.vx) || !IsFinite(value.vy) || !IsFinite(value.vz) ||
+                !IsFinite(value.ax) || !IsFinite(value.ay) || !IsFinite(value.az) ||
+                !IsFinite(value.wx) || !IsFinite(value.wy) || !IsFinite(value.wz) ||
+                !IsFinite(value.w_ax) || !IsFinite(value.w_ay) || !IsFinite(value.w_az))
+            {
+                return new TobControllerImu();
+            }
+
+            return new TobControllerImu
+            {
+                Available = true,
+                TimestampNs = value.timestamp,
+                LinearVelocityNative = new DoubleVector3(value.vx, value.vy, value.vz),
+                LinearAccelerationNative = new DoubleVector3(value.ax, value.ay, value.az),
+                AngularVelocityNative = new DoubleVector3(value.wx, value.wy, value.wz),
+                AngularAccelerationNative = new DoubleVector3(value.w_ax, value.w_ay, value.w_az)
             };
         }
 
@@ -807,9 +1011,93 @@ namespace Robot
                 new Quaternion((float)poseInfo.rx, (float)poseInfo.ry, (float)poseInfo.rz, (float)poseInfo.rw));
             json["status"] = poseInfo.confidence;
             json["timeStampNs"] = poseInfo.timestamp;
+            json["poseTimeStampNs"] = poseInfo.timestamp;
             json["type"] = poseInfo.type;
             json["poseError"] = poseInfo.poseError;
+            AppendNativeKinematics(json, new NativePoseKinematics
+            {
+                Available = poseInfo.nativeKinematicsValid,
+                PoseTimeStampNs = poseInfo.timestamp,
+                AngularVelocity = poseInfo.angularVelocity,
+                LinearVelocity = poseInfo.linearVelocity,
+                AngularAcceleration = poseInfo.angularAcceleration,
+                LinearAcceleration = poseInfo.linearAcceleration
+            });
             return json;
+        }
+
+        public static NativePoseKinematics CreateNativePoseKinematics(PxrSensorState2 sensorState)
+        {
+            return new NativePoseKinematics
+            {
+                Available = true,
+                PoseTimeStampNs = unchecked((long)sensorState.poseTimeStampNs),
+                AngularVelocity = ToVector3(sensorState.angularVelocity),
+                LinearVelocity = ToVector3(sensorState.linearVelocity),
+                AngularAcceleration = ToVector3(sensorState.angularAcceleration),
+                LinearAcceleration = ToVector3(sensorState.linearAcceleration)
+            };
+        }
+
+        public static void AppendNativeKinematics(JsonData deviceJson, NativePoseKinematics kinematics)
+        {
+            if (deviceJson == null || !kinematics.Available)
+            {
+                return;
+            }
+
+            JsonData imu = new JsonData();
+            imu["schema_version"] = NativeKinematicsSchemaVersion;
+            imu["pico_pose_timestamp_ns"] = kinematics.PoseTimeStampNs;
+            imu["linear_velocity_mps"] = BuildVectorJson(kinematics.LinearVelocity);
+            imu["angular_velocity_rad_s"] = BuildVectorJson(kinematics.AngularVelocity);
+            imu["linear_acceleration_mps2"] = BuildVectorJson(kinematics.LinearAcceleration);
+            imu["angular_acceleration_rad_s2"] = BuildVectorJson(kinematics.AngularAcceleration);
+            deviceJson["imu_v1"] = imu;
+        }
+
+        public static void AppendTobControllerImu(JsonData deviceJson, TobControllerImu imuData)
+        {
+            if (deviceJson == null || !imuData.Available)
+            {
+                return;
+            }
+
+            JsonData imu = new JsonData();
+            imu["schema_version"] = TobControllerImuSchemaVersion;
+            imu["timestamp_ns"] = imuData.TimestampNs;
+            imu["linear_velocity_native"] = BuildVectorJson(imuData.LinearVelocityNative);
+            imu["linear_acceleration_native"] = BuildVectorJson(imuData.LinearAccelerationNative);
+            imu["angular_velocity_native"] = BuildVectorJson(imuData.AngularVelocityNative);
+            imu["angular_acceleration_native"] = BuildVectorJson(imuData.AngularAccelerationNative);
+            deviceJson["tob_controller_imu_v1"] = imu;
+        }
+
+        private static Vector3 ToVector3(PxrVector3f value)
+        {
+            return new Vector3(value.x, value.y, value.z);
+        }
+
+        private static JsonData BuildVectorJson(Vector3 value)
+        {
+            JsonData vector = new JsonData();
+            vector.SetJsonType(JsonType.Array);
+            // This project ships an older LitJson whose object wrapper supports
+            // Double but not Single. Unity Vector3 components are Single.
+            vector.Add((double)value.x);
+            vector.Add((double)value.y);
+            vector.Add((double)value.z);
+            return vector;
+        }
+
+        private static JsonData BuildVectorJson(DoubleVector3 value)
+        {
+            JsonData vector = new JsonData();
+            vector.SetJsonType(JsonType.Array);
+            vector.Add(value.X);
+            vector.Add(value.Y);
+            vector.Add(value.Z);
+            return vector;
         }
 
         private string BuildEnvelope(string source, string kind, long seq, bool success, JsonData data, string error)
@@ -839,6 +1127,9 @@ namespace Robot
         {
             _fileWriter?.Enqueue(fileName, line);
         }
+
+        private bool IsFileWriterAccepting =>
+            _fileWriter != null && _fileWriter.IsAcceptingLines;
 
         private static double GetIntervalSeconds(int sampleHz)
         {
@@ -924,6 +1215,49 @@ namespace Robot
                    rotation.w.ToString("R");
         }
 
+        public struct NativePoseKinematics
+        {
+            public bool Available;
+            public long PoseTimeStampNs;
+            public Vector3 AngularVelocity;
+            public Vector3 LinearVelocity;
+            public Vector3 AngularAcceleration;
+            public Vector3 LinearAcceleration;
+        }
+
+        public struct DoubleVector3
+        {
+            public double X;
+            public double Y;
+            public double Z;
+
+            public DoubleVector3(double x, double y, double z)
+            {
+                X = x;
+                Y = y;
+                Z = z;
+            }
+        }
+
+        public struct TobControllerImu
+        {
+            public bool Available;
+            public long TimestampNs;
+            public DoubleVector3 LinearVelocityNative;
+            public DoubleVector3 LinearAccelerationNative;
+            public DoubleVector3 AngularVelocityNative;
+            public DoubleVector3 AngularAccelerationNative;
+        }
+
+        public struct EnterpriseHeadTcpPose
+        {
+            public bool HasPose;
+            public string Pose;
+            public int Status;
+            public long TimeStampNs;
+            public NativePoseKinematics NativeKinematics;
+        }
+
         public struct EnterpriseControllerTcpPose
         {
             public bool HasPose;
@@ -932,6 +1266,8 @@ namespace Robot
             public long TimeStampNs;
             public int Type;
             public int PoseError;
+            public NativePoseKinematics NativeKinematics;
+            public TobControllerImu TobControllerImu;
         }
 
         private struct ControllerInputSnapshot

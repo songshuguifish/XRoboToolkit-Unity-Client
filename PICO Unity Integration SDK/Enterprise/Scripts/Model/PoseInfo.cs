@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using UnityEngine;
 
 namespace Unity.XR.PICO.TOBSupport
 {
@@ -15,6 +16,11 @@ namespace Unity.XR.PICO.TOBSupport
         public int type;
         public int confidence;
         public int poseError;
+        public bool nativeKinematicsValid;
+        public Vector3 angularVelocity;
+        public Vector3 linearVelocity;
+        public Vector3 angularAcceleration;
+        public Vector3 linearAcceleration;
 
         public List<long> reservedInt;
         public List<double> reservedDouble;

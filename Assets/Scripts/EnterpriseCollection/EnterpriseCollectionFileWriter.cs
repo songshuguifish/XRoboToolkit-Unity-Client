@@ -39,6 +39,10 @@ namespace Robot
 
         public bool IsWriterThreadAlive => _writerThread != null && _writerThread.IsAlive;
 
+        // Sampling threads use this guard before constructing diagnostic JSON. Checking only
+        // inside Enqueue is too late: method arguments have already allocated the whole line.
+        public bool IsAcceptingLines => _enabled && _acceptingLines;
+
         public void Start(Meta meta)
         {
             if (!_enabled)

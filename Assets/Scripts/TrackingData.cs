@@ -67,11 +67,18 @@ namespace Robot
             if (HeadOn)
             {
                 if (TrackingDataSourceCtrl.UseEnterpriseSDK &&
-                    EnterpriseCollectionRecorder.TryGetLatestEnterpriseHeadForTcp(out string enterprisePose, out int enterpriseStatus))
+                    EnterpriseCollectionRecorder.TryGetLatestEnterpriseHeadForTcp(
+                        out EnterpriseCollectionRecorder.EnterpriseHeadTcpPose enterpriseHead,
+                        out _))
                 {
                     JsonData enterpriseHeadJson = new JsonData();
-                    enterpriseHeadJson["pose"] = enterprisePose;
-                    enterpriseHeadJson["status"] = enterpriseStatus;
+                    enterpriseHeadJson["pose"] = enterpriseHead.Pose;
+                    enterpriseHeadJson["status"] = enterpriseHead.Status;
+                    enterpriseHeadJson["timeStampNs"] = enterpriseHead.TimeStampNs;
+                    enterpriseHeadJson["poseTimeStampNs"] = enterpriseHead.TimeStampNs;
+                    EnterpriseCollectionRecorder.AppendNativeKinematics(
+                        enterpriseHeadJson,
+                        enterpriseHead.NativeKinematics);
                     totalData["Head"] = enterpriseHeadJson;
                 }
                 else
@@ -389,9 +396,12 @@ namespace Robot
                 ? EnterpriseCollectionRecorder.InvalidControllerPose
                 : pose.Pose;
             json["status"] = (double)pose.Status;
-            json["timeStampNs"] = (double)pose.TimeStampNs;
+            json["timeStampNs"] = pose.TimeStampNs;
+            json["poseTimeStampNs"] = pose.TimeStampNs;
             json["type"] = (double)pose.Type;
             json["poseError"] = (double)pose.PoseError;
+            EnterpriseCollectionRecorder.AppendNativeKinematics(json, pose.NativeKinematics);
+            EnterpriseCollectionRecorder.AppendTobControllerImu(json, pose.TobControllerImu);
 
             return json;
         }
@@ -423,6 +433,11 @@ namespace Robot
                 json.Remove("timeStampNs");
             }
 
+            if (json.ContainsKey("poseTimeStampNs"))
+            {
+                json.Remove("poseTimeStampNs");
+            }
+
             if (json.ContainsKey("type"))
             {
                 json.Remove("type");
@@ -431,6 +446,16 @@ namespace Robot
             if (json.ContainsKey("poseError"))
             {
                 json.Remove("poseError");
+            }
+
+            if (json.ContainsKey("imu_v1"))
+            {
+                json.Remove("imu_v1");
+            }
+
+            if (json.ContainsKey("tob_controller_imu_v1"))
+            {
+                json.Remove("tob_controller_imu_v1");
             }
         }
 
@@ -485,8 +510,12 @@ namespace Robot
                 pose.orientation.w);
             jsonData["pose"] = GetPoseStr(pos, rot);
             jsonData["status"] = sensorState.status;
-
-            //  jsonData["timeStampNs"] = sensorState.poseTimeStampNs;
+            long poseTimeStampNs = unchecked((long)sensorState.poseTimeStampNs);
+            jsonData["timeStampNs"] = poseTimeStampNs;
+            jsonData["poseTimeStampNs"] = poseTimeStampNs;
+            EnterpriseCollectionRecorder.AppendNativeKinematics(
+                jsonData,
+                EnterpriseCollectionRecorder.CreateNativePoseKinematics(sensorState));
             return jsonData;
         }
 

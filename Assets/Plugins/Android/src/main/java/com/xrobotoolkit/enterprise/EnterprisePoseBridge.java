@@ -22,10 +22,18 @@ public final class EnterprisePoseBridge {
     private static final String METHOD_GET_HEAD_POSE = "get_head_pose";
     private static final String METHOD_GET_CONTROLLER_POSE = "get_controller_pose";
     private static final long SLOW_CALL_THRESHOLD_NS = 15L * 1000L * 1000L;
-    private static final long PROFILE_LOG_INTERVAL = 100L;
+    private static final long PROFILE_LOG_INTERVAL = 1000L;
+    private static final int CONTROLLER_IMU_COUNT = 2;
+    private static final int CONTROLLER_IMU_PACKED_FIELDS = 14;
+    // Reused bridge storage: [count, (valid,timestamp,vx,vy,vz,ax,ay,az,wx,wy,wz,w_ax,w_ay,w_az) * 2].
+    // Unity copies primitive Java arrays into managed memory before the JNI local frame is
+    // popped, so returning this synchronized scratch array does not expose mutable state.
+    private static final double[] controllerImuPacked =
+        new double[1 + CONTROLLER_IMU_COUNT * CONTROLLER_IMU_PACKED_FIELDS];
 
     private static long headProfileCount;
     private static long controllerProfileCount;
+    private static long controllerImuProfileCount;
     private static Class<?> cachedUtilsClass;
     private static Method cachedGetInstanceMethod;
     private static Class<?> cachedGetServiceBinderClass;
@@ -40,6 +48,9 @@ public final class EnterprisePoseBridge {
     private static Class<?> cachedControllerDirectClass;
     private static Method cachedControllerDirectMethod;
     private static boolean cachedControllerDirectUnavailable;
+    private static Class<?> cachedControllerImuDirectClass;
+    private static Method cachedControllerImuDirectMethod;
+    private static boolean cachedControllerImuDirectUnavailable;
     private static Class<?> cachedPoseFieldClass;
     private static Field timestampField;
     private static Field xField;
@@ -52,6 +63,20 @@ public final class EnterprisePoseBridge {
     private static Field typeField;
     private static Field confidenceField;
     private static Field poseErrorField;
+    private static Class<?> cachedImuFieldClass;
+    private static Field imuTimestampField;
+    private static Field vxField;
+    private static Field vyField;
+    private static Field vzField;
+    private static Field axField;
+    private static Field ayField;
+    private static Field azField;
+    private static Field wxField;
+    private static Field wyField;
+    private static Field wzField;
+    private static Field waxField;
+    private static Field wayField;
+    private static Field wazField;
 
     private EnterprisePoseBridge() {
     }
@@ -232,6 +257,121 @@ public final class EnterprisePoseBridge {
         }
     }
 
+    public static String getControllerImuJson(long predictTime) {
+        JSONObject result = new JSONObject();
+        long callStartNs = System.nanoTime();
+        long binderNs = 0L;
+        long directNs = 0L;
+        long jsonNs = 0L;
+        long stringifyNs = 0L;
+        try {
+            long stepStartNs = System.nanoTime();
+            Object binder = getServiceBinder();
+            binderNs = System.nanoTime() - stepStartNs;
+            if (binder == null) {
+                String json = failure(result, "binder=null");
+                logProfile("controller_imu", "none", callStartNs, binderNs, 0L, directNs,
+                    0L, jsonNs, stringifyNs, false);
+                return json;
+            }
+
+            StringBuilder errors = new StringBuilder();
+            stepStartNs = System.nanoTime();
+            Object imus = invokeDirectLongMethod(binder, "getControllerIMUData", predictTime, errors);
+            directNs = System.nanoTime() - stepStartNs;
+
+            stepStartNs = System.nanoTime();
+            JSONArray imuArray = imusToJsonArray(imus);
+            jsonNs = System.nanoTime() - stepStartNs;
+            if (imuArray != null) {
+                result.put("success", true);
+                result.put("path", "direct");
+                result.put("imus", imuArray);
+                stepStartNs = System.nanoTime();
+                String json = result.toString();
+                stringifyNs = System.nanoTime() - stepStartNs;
+                logProfile("controller_imu", "direct", callStartNs, binderNs, 0L, directNs,
+                    0L, jsonNs, stringifyNs, true);
+                return json;
+            }
+
+            putDiagnostics(result, binder);
+            result.put("errors", errors.toString());
+            String json = failure(result, "controller IMU unavailable");
+            logProfile("controller_imu", "none", callStartNs, binderNs, 0L, directNs,
+                0L, jsonNs, stringifyNs, false);
+            return json;
+        } catch (Throwable t) {
+            String json = exceptionJson("getControllerImuJson", t);
+            logProfile("controller_imu", "none", callStartNs, binderNs, 0L, directNs,
+                0L, jsonNs, stringifyNs, false);
+            return json;
+        }
+    }
+
+    /**
+     * Allocation-light production path for getControllerIMUData. The former JSON bridge built
+     * dozens of JSONObject/LitJson objects on every 250 Hz poll, which made Unity IL2CPP's
+     * native managed heap expand continuously. Timestamps remain exact because current PICO
+     * boot-clock nanoseconds are well below double's 2^53 exact-integer limit.
+     */
+    public static synchronized double[] getControllerImuPacked(long predictTime) {
+        try {
+            Object binder = getServiceBinder();
+            if (binder == null) {
+                return null;
+            }
+
+            Object imus = invokeDirectLongMethod(
+                binder, "getControllerIMUData", predictTime, new StringBuilder());
+            int count;
+            if (imus instanceof List) {
+                count = Math.min(CONTROLLER_IMU_COUNT, ((List<?>) imus).size());
+            } else if (imus != null && imus.getClass().isArray()) {
+                count = Math.min(CONTROLLER_IMU_COUNT, Array.getLength(imus));
+            } else {
+                return null;
+            }
+
+            for (int i = 0; i < controllerImuPacked.length; i++) {
+                controllerImuPacked[i] = 0.0;
+            }
+            controllerImuPacked[0] = count;
+            for (int i = 0; i < count; i++) {
+                Object imu = imus instanceof List
+                    ? ((List<?>) imus).get(i)
+                    : Array.get(imus, i);
+                if (imu == null) {
+                    continue;
+                }
+
+                ensureImuFields(imu.getClass());
+                int base = 1 + i * CONTROLLER_IMU_PACKED_FIELDS;
+                controllerImuPacked[base] = 1.0;
+                controllerImuPacked[base + 1] = imuTimestampField.getLong(imu);
+                controllerImuPacked[base + 2] = vxField.getDouble(imu);
+                controllerImuPacked[base + 3] = vyField.getDouble(imu);
+                controllerImuPacked[base + 4] = vzField.getDouble(imu);
+                controllerImuPacked[base + 5] = axField.getDouble(imu);
+                controllerImuPacked[base + 6] = ayField.getDouble(imu);
+                controllerImuPacked[base + 7] = azField.getDouble(imu);
+                controllerImuPacked[base + 8] = wxField.getDouble(imu);
+                controllerImuPacked[base + 9] = wyField.getDouble(imu);
+                controllerImuPacked[base + 10] = wzField.getDouble(imu);
+                controllerImuPacked[base + 11] = waxField.getDouble(imu);
+                controllerImuPacked[base + 12] = wayField.getDouble(imu);
+                controllerImuPacked[base + 13] = wazField.getDouble(imu);
+            }
+            return controllerImuPacked;
+        } catch (Throwable t) {
+            long count = nextProfileCount("controller_imu");
+            if (count % PROFILE_LOG_INTERVAL == 0L) {
+                Log.w(TAG, "packed controller IMU failed: " + describeThrowable(t));
+            }
+            return null;
+        }
+    }
+
     public static String getDiagnosticsJson() {
         JSONObject result = new JSONObject();
         try {
@@ -376,6 +516,23 @@ public final class EnterprisePoseBridge {
             }
         }
 
+        if ("getControllerIMUData".equals(methodName)) {
+            if (cachedControllerImuDirectClass == targetClass) {
+                return cachedControllerImuDirectUnavailable ? null : cachedControllerImuDirectMethod;
+            }
+
+            cachedControllerImuDirectClass = targetClass;
+            try {
+                cachedControllerImuDirectMethod = findMethod(targetClass, methodName, long.class);
+                cachedControllerImuDirectUnavailable = false;
+                return cachedControllerImuDirectMethod;
+            } catch (Throwable ignored) {
+                cachedControllerImuDirectMethod = null;
+                cachedControllerImuDirectUnavailable = true;
+                return null;
+            }
+        }
+
         try {
             return findMethod(targetClass, methodName, long.class);
         } catch (Throwable ignored) {
@@ -447,6 +604,51 @@ public final class EnterprisePoseBridge {
         return null;
     }
 
+    private static JSONObject imuToJson(Object imu) throws Exception {
+        ensureImuFields(imu.getClass());
+        JSONObject json = new JSONObject();
+        json.put("timestamp", imuTimestampField.getLong(imu));
+        json.put("vx", vxField.getDouble(imu));
+        json.put("vy", vyField.getDouble(imu));
+        json.put("vz", vzField.getDouble(imu));
+        json.put("ax", axField.getDouble(imu));
+        json.put("ay", ayField.getDouble(imu));
+        json.put("az", azField.getDouble(imu));
+        json.put("wx", wxField.getDouble(imu));
+        json.put("wy", wyField.getDouble(imu));
+        json.put("wz", wzField.getDouble(imu));
+        json.put("w_ax", waxField.getDouble(imu));
+        json.put("w_ay", wayField.getDouble(imu));
+        json.put("w_az", wazField.getDouble(imu));
+        return json;
+    }
+
+    private static JSONArray imusToJsonArray(Object imus) throws Exception {
+        if (imus == null) {
+            return null;
+        }
+
+        JSONArray array = new JSONArray();
+        if (imus instanceof List) {
+            List<?> list = (List<?>) imus;
+            for (int i = 0; i < list.size(); i++) {
+                Object imu = list.get(i);
+                array.put(imu == null ? JSONObject.NULL : imuToJson(imu));
+            }
+            return array;
+        }
+
+        if (imus.getClass().isArray()) {
+            int length = Array.getLength(imus);
+            for (int i = 0; i < length; i++) {
+                Object imu = Array.get(imus, i);
+                array.put(imu == null ? JSONObject.NULL : imuToJson(imu));
+            }
+            return array;
+        }
+        return null;
+    }
+
     private static void ensurePoseFields(Class<?> poseClass) throws NoSuchFieldException {
         if (cachedPoseFieldClass == poseClass) {
             return;
@@ -464,6 +666,27 @@ public final class EnterprisePoseBridge {
         typeField = getField(poseClass, "type");
         confidenceField = getField(poseClass, "confidence");
         poseErrorField = getField(poseClass, "poseError");
+    }
+
+    private static void ensureImuFields(Class<?> imuClass) throws NoSuchFieldException {
+        if (cachedImuFieldClass == imuClass) {
+            return;
+        }
+
+        cachedImuFieldClass = imuClass;
+        imuTimestampField = getField(imuClass, "timestamp");
+        vxField = getField(imuClass, "vx");
+        vyField = getField(imuClass, "vy");
+        vzField = getField(imuClass, "vz");
+        axField = getField(imuClass, "ax");
+        ayField = getField(imuClass, "ay");
+        azField = getField(imuClass, "az");
+        wxField = getField(imuClass, "wx");
+        wyField = getField(imuClass, "wy");
+        wzField = getField(imuClass, "wz");
+        waxField = getField(imuClass, "w_ax");
+        wayField = getField(imuClass, "w_ay");
+        wazField = getField(imuClass, "w_az");
     }
 
     private static Field getField(Class<?> targetClass, String fieldName) throws NoSuchFieldException {
@@ -515,7 +738,8 @@ public final class EnterprisePoseBridge {
 
     private static void addUsefulMethod(JSONArray methods, Method method) {
         String value = method.toString();
-        if (value.contains("Pose") || value.contains("pose") || value.contains("pbsCommonMessageLocked")) {
+        if (value.contains("Pose") || value.contains("pose") || value.contains("IMU")
+            || value.contains("pbsCommonMessageLocked")) {
             methods.put(value);
         }
     }
@@ -552,6 +776,11 @@ public final class EnterprisePoseBridge {
         if ("head".equals(kind)) {
             headProfileCount++;
             return headProfileCount;
+        }
+
+        if ("controller_imu".equals(kind)) {
+            controllerImuProfileCount++;
+            return controllerImuProfileCount;
         }
 
         controllerProfileCount++;

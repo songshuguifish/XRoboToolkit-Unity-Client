@@ -2052,6 +2052,15 @@ namespace Unity.XR.PICO.TOBSupport
         }
 
         /// <summary>
+        /// Returns the TobService controller IMU payload. Element 0 is left and element 1 is right.
+        /// predictTime is expressed in nanoseconds by the Enterprise API.
+        /// </summary>
+        public static ControllerImuData[] GetControllerImuData(long predictTime = 0L)
+        {
+            return PXR_EnterprisePlugin.GetControllerImuData(predictTime);
+        }
+
+        /// <summary>
         /// Directs the user to the floor-height-adjustment app to adjust the floor's height.
         /// @note Supported by PICO Neo3 Pro, general PICO Neo3 devices activated as enterprise devices, and PICO 4 Enterprise.
         /// </summary>

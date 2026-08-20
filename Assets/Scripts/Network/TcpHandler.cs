@@ -68,6 +68,8 @@ namespace Robot
         private ControllerInputState _cachedRightControllerInput;
         private long _lastDirectTrackingHeadSampleSeq;
         private long _lastDirectTrackingControllerSampleSeq;
+        private long _lastSentLeftTobImuTimestampNs = long.MinValue;
+        private long _lastSentRightTobImuTimestampNs = long.MinValue;
         private float _lastHeardSend = 0;
         private float _lastReconnectTime = 0;
         private bool _reconnectEnable = false;
@@ -445,8 +447,8 @@ namespace Robot
 
                 // Read the latest cache and its sequence numbers first. Do not build any
                 // JsonData objects until we know that at least one source has advanced.
-                string headPose = null;
-                int headStatus = 0;
+                EnterpriseCollectionRecorder.EnterpriseHeadTcpPose headPose =
+                    default(EnterpriseCollectionRecorder.EnterpriseHeadTcpPose);
                 EnterpriseCollectionRecorder.EnterpriseControllerTcpPose leftController =
                     default(EnterpriseCollectionRecorder.EnterpriseControllerTcpPose);
                 EnterpriseCollectionRecorder.EnterpriseControllerTcpPose rightController =
@@ -454,20 +456,18 @@ namespace Robot
                 long headSampleSeq = _lastDirectTrackingHeadSampleSeq;
                 long controllerSampleSeq = _lastDirectTrackingControllerSampleSeq;
                 bool hasNewTrackingSample = false;
+                bool hasHeadPose = false;
 
                 LogEnterpriseDirectTrackingGateIfChanged();
                 if (TrackingData.HeadOn)
                 {
-                    if (!EnterpriseCollectionRecorder.TryGetLatestEnterpriseHeadForTcp(
-                            out headPose,
-                            out headStatus,
-                            out headSampleSeq))
+                    hasHeadPose = EnterpriseCollectionRecorder.TryGetLatestEnterpriseHeadForTcp(
+                        out headPose,
+                        out headSampleSeq);
+                    if (hasHeadPose)
                     {
-                        Thread.Sleep(GetClampedSleepMs(trackingThreadWaitForHeadSleepMs));
-                        continue;
+                        hasNewTrackingSample |= headSampleSeq != _lastDirectTrackingHeadSampleSeq;
                     }
-
-                    hasNewTrackingSample |= headSampleSeq != _lastDirectTrackingHeadSampleSeq;
                 }
 
                 if (TrackingData.ControllerOn)
@@ -496,11 +496,14 @@ namespace Robot
                 Interlocked.Increment(ref _directNewSampleCount);
 
                 JsonData trackingValue = new JsonData();
-                if (TrackingData.HeadOn)
+                if (TrackingData.HeadOn && hasHeadPose)
                 {
                     JsonData head = new JsonData();
-                    head["pose"] = headPose;
-                    head["status"] = headStatus;
+                    head["pose"] = headPose.Pose;
+                    head["status"] = headPose.Status;
+                    head["timeStampNs"] = headPose.TimeStampNs;
+                    head["poseTimeStampNs"] = headPose.TimeStampNs;
+                    EnterpriseCollectionRecorder.AppendNativeKinematics(head, headPose.NativeKinematics);
                     trackingValue["Head"] = head;
                 }
 
@@ -552,21 +555,22 @@ namespace Robot
                    (TrackingData.HeadOn || TrackingData.ControllerOn);
         }
 
-        private static JsonData BuildEnterpriseControllerJson(
+        private JsonData BuildEnterpriseControllerJson(
             EnterpriseCollectionRecorder.EnterpriseControllerTcpPose left,
             EnterpriseCollectionRecorder.EnterpriseControllerTcpPose right,
             ControllerInputState leftInput,
             ControllerInputState rightInput)
         {
             JsonData controller = new JsonData();
-            controller["left"] = BuildEnterpriseControllerSideJson(left, leftInput);
-            controller["right"] = BuildEnterpriseControllerSideJson(right, rightInput);
+            controller["left"] = BuildEnterpriseControllerSideJson(left, leftInput, true);
+            controller["right"] = BuildEnterpriseControllerSideJson(right, rightInput, false);
             return controller;
         }
 
-        private static JsonData BuildEnterpriseControllerSideJson(
+        private JsonData BuildEnterpriseControllerSideJson(
             EnterpriseCollectionRecorder.EnterpriseControllerTcpPose pose,
-            ControllerInputState input)
+            ControllerInputState input,
+            bool isLeft)
         {
             JsonData json = new JsonData();
             json["axisX"] = input.AxisX;
@@ -590,11 +594,48 @@ namespace Robot
                 ? EnterpriseCollectionRecorder.InvalidControllerPose
                 : pose.Pose;
             json["status"] = (double)pose.Status;
-            json["timeStampNs"] = (double)pose.TimeStampNs;
+            json["timeStampNs"] = pose.TimeStampNs;
+            json["poseTimeStampNs"] = pose.TimeStampNs;
             json["type"] = (double)pose.Type;
             json["poseError"] = (double)pose.PoseError;
+            EnterpriseCollectionRecorder.AppendNativeKinematics(json, pose.NativeKinematics);
+            if (ShouldSendTobControllerImu(pose.TobControllerImu, isLeft))
+            {
+                EnterpriseCollectionRecorder.AppendTobControllerImu(json, pose.TobControllerImu);
+            }
 
             return json;
+        }
+
+        private bool ShouldSendTobControllerImu(
+            EnterpriseCollectionRecorder.TobControllerImu imu,
+            bool isLeft)
+        {
+            if (!imu.Available)
+            {
+                return false;
+            }
+
+            long previous = isLeft
+                ? _lastSentLeftTobImuTimestampNs
+                : _lastSentRightTobImuTimestampNs;
+            // A large clock reset denotes a new controller/service epoch. Small backsteps
+            // from alternating vendor buffers are ignored until a genuinely newer sample.
+            bool clockReset = previous != long.MinValue &&
+                imu.TimestampNs < previous - 1000000000L;
+            bool shouldSend = previous == long.MinValue || imu.TimestampNs > previous || clockReset;
+            if (shouldSend)
+            {
+                if (isLeft)
+                {
+                    _lastSentLeftTobImuTimestampNs = imu.TimestampNs;
+                }
+                else
+                {
+                    _lastSentRightTobImuTimestampNs = imu.TimestampNs;
+                }
+            }
+            return shouldSend;
         }
 
         private static ControllerInputState ReadControllerInput(XRNode node)
@@ -746,7 +787,8 @@ namespace Robot
 
             double sendHz = elapsedSeconds > 0 ? _trackingPacketsSentInWindow / elapsedSeconds : 0;
             string rateMessage =
-                $"TCP tracking send rate: {sendHz:F1}Hz mode={_lastTrackingSendMode} pending={_pendingDirectTrackingPackets}";
+                $"TCP tracking send rate: {sendHz:F1}Hz mode={_lastTrackingSendMode} " +
+                $"pending={_pendingDirectTrackingPackets}";
             if (outputTrackingRateToLogWindow)
             {
                 LogWindow.Info(rateMessage);
@@ -940,6 +982,14 @@ namespace Robot
             _state = SocketState.CLOSE;
             ResetDirectTrackingCache();
             Interlocked.Exchange(ref _pendingDirectTrackingPackets, 0);
+            // Packets queued for a dead socket are not replayable tracking history. Release
+            // their JSON/UTF-8 byte arrays now so reconnect cycles cannot retain stale payloads.
+            while (_sendDatas.TryDequeue(out _))
+            {
+            }
+            while (_sendTrackingMsg.TryDequeue(out _))
+            {
+            }
             lock (_sendObject)
             {
                 if (_socket != null)
