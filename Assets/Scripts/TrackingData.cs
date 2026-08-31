@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using LitJson;
 using Unity.XR.PICO.TOBSupport;
 using Unity.XR.PXR;
@@ -26,6 +27,8 @@ namespace Robot
         private JsonData _handData = new JsonData();
         private JsonData _leftHandData = new JsonData();
         private JsonData _rightHandData = new JsonData();
+        private readonly ArucoMarkerTelemetry.ConsumerCursor _arucoMarkerCursor =
+            ArucoMarkerTelemetry.CreateConsumerCursor("tracking_data_local");
 
         public static void SetHeadOn(bool on)
         {
@@ -56,12 +59,21 @@ namespace Robot
             }
         }
 
-        public void Get(ref JsonData totalData)
+        public void Get(
+            ref JsonData totalData,
+            ArucoMarkerTelemetry.ConsumerCursor arucoMarkerCursor = null)
         {
             //sensor
             double predictTime = PXR_Enterprise.GetPredictedDisplayTime(); //毫秒
             predictTime = predictTime * 1000;
             totalData["predictTime"] = predictTime; //微秒，对应camera录制中帧插入的时间戳
+            totalData["sdk_release"] = PXR_Constants.SDKVersion;
+            totalData["sdk_package_version"] =
+                "com.unity.xr.picoxr@" + PXR_Constants.SDKVersion;
+            TrackingOriginTelemetry.AppendTo(totalData);
+            LargeSpaceTelemetry.AppendTo(totalData);
+            ArucoMarkerTelemetry.AppendTo(
+                totalData, arucoMarkerCursor ?? _arucoMarkerCursor);
             totalData["appState"] = _stateData;
             _stateData["focus"] = Application.isFocused;
             if (HeadOn)
@@ -76,9 +88,17 @@ namespace Robot
                     enterpriseHeadJson["status"] = enterpriseHead.Status;
                     enterpriseHeadJson["timeStampNs"] = enterpriseHead.TimeStampNs;
                     enterpriseHeadJson["poseTimeStampNs"] = enterpriseHead.TimeStampNs;
+                    enterpriseHeadJson["poseError"] = enterpriseHead.PoseError;
+                    enterpriseHeadJson["poseSource"] = enterpriseHead.PoseSource;
+                    EnterpriseCollectionRecorder.AppendNativePosePair(
+                        enterpriseHeadJson,
+                        enterpriseHead.NativePosePair);
                     EnterpriseCollectionRecorder.AppendNativeKinematics(
                         enterpriseHeadJson,
                         enterpriseHead.NativeKinematics);
+                    EnterpriseCollectionRecorder.AppendOfficialHeadTelemetry(
+                        enterpriseHeadJson,
+                        enterpriseHead.OfficialTelemetry);
                     totalData["Head"] = enterpriseHeadJson;
                 }
                 else
@@ -127,10 +147,12 @@ namespace Robot
 
             if (TrackingTypeValue == TrackingType.Body)
             {
-                int state = 0;
-                PXR_Input.GetMotionTrackerCalibState(ref state);
+                bool isTracking = false;
+                BodyTrackingStatus state = new BodyTrackingStatus();
+                int stateResult =
+                    PXR_MotionTracking.GetBodyTrackingState(ref isTracking, ref state);
 
-                if (state == 1)
+                if (stateResult == 0 && isTracking)
                 {
                     // Get the current tracking mode
                     MotionTrackerMode trackingMode = PXR_MotionTracking.GetMotionTrackerMode();
@@ -179,8 +201,7 @@ namespace Robot
 
         private JsonData GetMotionTracking()
         {
-            MotionTrackerConnectState mtcs = new MotionTrackerConnectState();
-            int ret = PXR_MotionTracking.GetMotionTrackerConnectStateWithSN(ref mtcs);
+            List<SwiftDevice> devices = PXR_Enterprise.GetSwiftTrackerDevices();
 
             int len = 0;
             JsonData joints;
@@ -196,63 +217,56 @@ namespace Robot
             }
 
 
-            if (ret == 0)
+            if (devices != null)
             {
-                if (mtcs.trackersSN.Length > 0)
+                for (int i = 0; i < devices.Count; i++)
                 {
-                    for (int i = 0; i < mtcs.trackerSum; i++)
+                    SwiftDevice device = devices[i];
+                    if (device == null || device.connectState != SwiftDevice.STATUS_ONLINE)
                     {
-                        string sn = mtcs.trackersSN[i].value.ToString().Trim();
-                        if (!string.IsNullOrEmpty(sn))
-                        {
-                            //Obtain estimated position and rotation values for each somatosensory tracker
-                            MotionTrackerLocations locations = new MotionTrackerLocations();
-                            MotionTrackerConfidence confidence = new MotionTrackerConfidence();
-                            int result =
-                                PXR_MotionTracking.GetMotionTrackerLocations(mtcs.trackersSN[i], ref locations,
-                                    ref confidence);
-
-                            // If the position and rotation information are successfully obtained
-                            if (result == 0)
-                            {
-                                JsonData joint;
-                                if (len < joints.Count)
-                                {
-                                    joint = joints[len];
-                                }
-                                else
-                                {
-                                    joint = new JsonData();
-                                    joints.Add(joint);
-                                }
-
-                                len++;
-                                MotionTrackerLocation localLocation = locations.localLocation;
-
-                                joint["p"] = GetPoseStr(localLocation.pose.Position, localLocation.pose.Orientation);
-                                unsafe
-                                {
-                                    float* pVelo = localLocation.linearVelocity;
-                                    float* pAcce = localLocation.linearAcceleration;
-                                    float* pWVelo = localLocation.angularVelocity;
-                                    float* pWAcce = localLocation.angularAcceleration;
-
-                                    string va = pVelo[0] + "," + pVelo[1] + "," + pVelo[2] + "," + pWVelo[0] + "," +
-                                                pWVelo[1] +
-                                                "," + pWVelo[2];
-
-                                    joint["va"] = va;
-                                    string wva = pAcce[0] + "," + pAcce[1] + "," + pAcce[2] + "," + pWAcce[0] + "," +
-                                                 pWAcce[1] +
-                                                 "," + pWAcce[2];
-
-                                    joint["wva"] = wva;
-                                }
-
-                                joint["sn"] = sn;
-                            }
-                        }
+                        continue;
                     }
+
+                    string sn = (device.sn ?? string.Empty).Trim();
+                    MotionTrackerLocation localLocation = new MotionTrackerLocation();
+                    bool isValidPose = false;
+                    int result = PXR_MotionTracking.GetMotionTrackerLocation(
+                        device.id, ref localLocation, ref isValidPose);
+                    if (result != 0 || !isValidPose)
+                    {
+                        continue;
+                    }
+
+                    JsonData joint;
+                    if (len < joints.Count)
+                    {
+                        joint = joints[len];
+                    }
+                    else
+                    {
+                        joint = new JsonData();
+                        joints.Add(joint);
+                    }
+
+                    len++;
+                    joint["p"] = GetPoseStr(
+                        localLocation.pose.Position, localLocation.pose.Orientation);
+                    unsafe
+                    {
+                        float* pVelo = localLocation.linearVelocity;
+                        float* pAcce = localLocation.linearAcceleration;
+                        float* pWVelo = localLocation.angularVelocity;
+                        float* pWAcce = localLocation.angularAcceleration;
+
+                        joint["va"] =
+                            pVelo[0] + "," + pVelo[1] + "," + pVelo[2] + "," +
+                            pWVelo[0] + "," + pWVelo[1] + "," + pWVelo[2];
+                        joint["wva"] =
+                            pAcce[0] + "," + pAcce[1] + "," + pAcce[2] + "," +
+                            pWAcce[0] + "," + pWAcce[1] + "," + pWAcce[2];
+                    }
+
+                    joint["sn"] = sn;
                 }
             }
 
@@ -400,6 +414,7 @@ namespace Robot
             json["poseTimeStampNs"] = pose.TimeStampNs;
             json["type"] = (double)pose.Type;
             json["poseError"] = (double)pose.PoseError;
+            EnterpriseCollectionRecorder.AppendNativePosePair(json, pose.NativePosePair);
             EnterpriseCollectionRecorder.AppendNativeKinematics(json, pose.NativeKinematics);
             EnterpriseCollectionRecorder.AppendTobControllerImu(json, pose.TobControllerImu);
 

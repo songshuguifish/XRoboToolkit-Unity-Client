@@ -1,4 +1,5 @@
-﻿/*******************************************************************************
+﻿#if !PICO_OPENXR_SDK
+/*******************************************************************************
 Copyright © 2015-2022 PICO Technology Co., Ltd.All rights reserved.  
 
 NOTICE：All information contained herein is, and remains the property of 
@@ -153,8 +154,9 @@ namespace Unity.XR.PXR
         /// * `LostIMUJitter`: IMU data jitter
         /// * `LostUnknown`: unknown error
         /// </returns>
+        [Obsolete("SeeThroughTracking State is not supported.", true)]
         public static PxrTrackingState GetSeeThroughTrackingState() {
-            return PXR_Plugin.Boundary.UPxr_GetSeeThroughTrackingState();
+            return PxrTrackingState.LostUnknown;
         }
         
         /// <summary>
@@ -173,11 +175,12 @@ namespace Unity.XR.PXR
         /// * `true`: use
         /// * `false`: do not use
         /// </param>
+        [Obsolete("Global Pose is not supported.", true)]
         public static void UseGlobalPose(bool value)
         {
-            PXR_Plugin.Boundary.UPxr_SetSeeThroughState(value);
+           
         }
     }
 }
-
+#endif
 

@@ -1,4 +1,5 @@
-﻿/*******************************************************************************
+﻿#if !PICO_OPENXR_SDK
+/*******************************************************************************
 Copyright © 2015-2022 PICO Technology Co., Ltd.All rights reserved.  
 
 NOTICE：All information contained herein is, and remains the property of 
@@ -58,31 +59,26 @@ namespace Unity.XR.PXR.Editor
             }
 
             //ffr
-            manager.foveatedRenderingMode =
-                (FoveatedRenderingMode)EditorGUILayout.EnumPopup("Foveated Rendering Mode",
-                    manager.foveatedRenderingMode);
+            manager.foveatedRenderingMode = (FoveatedRenderingMode)EditorGUILayout.EnumPopup("Foveated Rendering Mode", manager.foveatedRenderingMode);
             if (FoveatedRenderingMode.FixedFoveatedRendering == manager.foveatedRenderingMode)
             {
                 projectConfig.enableETFR = false;
                 projectConfig.recommendSubsamping = false;
                 projectConfig.validationFFREnabled = false;
                 projectConfig.validationETFREnabled = false;
-                manager.foveationLevel =
-                    (FoveationLevel)EditorGUILayout.EnumPopup("Foveated Rendering Level", manager.foveationLevel);
+                projectConfig.foveationLevel= manager.foveationLevel = (FoveationLevel)EditorGUILayout.EnumPopup("Foveated Rendering Level", manager.foveationLevel);
+                manager.eyeFoveationLevel = FoveationLevel.None;
                 if (FoveationLevel.None != manager.foveationLevel)
                 {
                     projectConfig.validationFFREnabled = true;
-                    if (GraphicsDeviceType.OpenGLES3 ==
-                        PlayerSettings.GetGraphicsAPIs(EditorUserBuildSettings.activeBuildTarget)[0] &&
-                        PlayerSettings.colorSpace == ColorSpace.Gamma)
+                    if (GraphicsDeviceType.OpenGLES3 == PlayerSettings.GetGraphicsAPIs(EditorUserBuildSettings.activeBuildTarget)[0] && PlayerSettings.colorSpace == ColorSpace.Gamma)
                     {
                         projectConfig.enableSubsampled = false;
                         projectConfig.recommendSubsamping = false;
                     }
                     else
                     {
-                        projectConfig.enableSubsampled =
-                            EditorGUILayout.Toggle("  Subsampling", projectConfig.enableSubsampled);
+                        projectConfig.enableSubsampled = EditorGUILayout.Toggle("  Subsampling", projectConfig.enableSubsampled);
                         projectConfig.recommendSubsamping = true;
                     }
                 }
@@ -93,22 +89,19 @@ namespace Unity.XR.PXR.Editor
                 projectConfig.recommendSubsamping = false;
                 projectConfig.validationFFREnabled = false;
                 projectConfig.validationETFREnabled = false;
-                manager.eyeFoveationLevel =
-                    (FoveationLevel)EditorGUILayout.EnumPopup("Foveated Rendering Level", manager.eyeFoveationLevel);
+                projectConfig.foveationLevel=manager.eyeFoveationLevel = (FoveationLevel)EditorGUILayout.EnumPopup("Foveated Rendering Level", manager.eyeFoveationLevel);
+                manager.foveationLevel = FoveationLevel.None;
                 if (FoveationLevel.None != manager.eyeFoveationLevel)
                 {
                     projectConfig.validationETFREnabled = true;
-                    if (GraphicsDeviceType.OpenGLES3 ==
-                        PlayerSettings.GetGraphicsAPIs(EditorUserBuildSettings.activeBuildTarget)[0] &&
-                        PlayerSettings.colorSpace == ColorSpace.Gamma)
+                    if (GraphicsDeviceType.OpenGLES3 == PlayerSettings.GetGraphicsAPIs(EditorUserBuildSettings.activeBuildTarget)[0] && PlayerSettings.colorSpace == ColorSpace.Gamma)
                     {
                         projectConfig.enableSubsampled = false;
                         projectConfig.recommendSubsamping = false;
                     }
                     else
                     {
-                        projectConfig.enableSubsampled =
-                            EditorGUILayout.Toggle("  Subsampling", projectConfig.enableSubsampled);
+                        projectConfig.enableSubsampled = EditorGUILayout.Toggle("  Subsampling", projectConfig.enableSubsampled);
                         projectConfig.recommendSubsamping = true;
                     }
                 }
@@ -122,16 +115,12 @@ namespace Unity.XR.PXR.Editor
             firstLevelStyle.wordWrap = true;
             var guiContent = new GUIContent();
             guiContent.text = "Eye Tracking";
-            guiContent.tooltip =
-                "Before calling EyeTracking API, enable this option first, only for Neo3 Pro Eye , PICO 4 Pro device.";
+            guiContent.tooltip = "Before calling EyeTracking API, enable this option first, only for Neo3 Pro Eye , PICO 4 Pro device.";
             projectConfig.eyeTracking = EditorGUILayout.Toggle(guiContent, projectConfig.eyeTracking);
             manager.eyeTracking = projectConfig.eyeTracking;
-            if (manager.eyeTracking ||
-                FoveatedRenderingMode.EyeTrackedFoveatedRendering == manager.foveatedRenderingMode)
+            if (manager.eyeTracking || FoveatedRenderingMode.EyeTrackedFoveatedRendering == manager.foveatedRenderingMode)
             {
-                projectConfig.eyetrackingCalibration =
-                    EditorGUILayout.Toggle(new GUIContent("Eye Tracking Calibration"),
-                        projectConfig.eyetrackingCalibration);
+                projectConfig.eyetrackingCalibration = EditorGUILayout.Toggle(new GUIContent("Eye Tracking Calibration"), projectConfig.eyetrackingCalibration);
                 EditorGUILayout.BeginVertical("box");
                 EditorGUILayout.LabelField("Note:", firstLevelStyle);
                 EditorGUILayout.LabelField("Eye Tracking is supported only on Neo 3 Pro Eye , PICO 4 Pro");
@@ -147,8 +136,7 @@ namespace Unity.XR.PXR.Editor
                 projectConfig.faceTracking = false;
                 projectConfig.lipsyncTracking = false;
             }
-            else if (manager.trackingMode == FaceTrackingMode.PXR_FTM_FACE_LIPS_VIS ||
-                     manager.trackingMode == FaceTrackingMode.PXR_FTM_FACE_LIPS_BS)
+            else if (manager.trackingMode == FaceTrackingMode.PXR_FTM_FACE_LIPS_VIS || manager.trackingMode == FaceTrackingMode.PXR_FTM_FACE_LIPS_BS)
             {
                 projectConfig.faceTracking = true;
                 projectConfig.lipsyncTracking = true;
@@ -163,7 +151,6 @@ namespace Unity.XR.PXR.Editor
                 projectConfig.faceTracking = false;
                 projectConfig.lipsyncTracking = true;
             }
-
             manager.faceTracking = projectConfig.faceTracking;
             manager.lipsyncTracking = projectConfig.lipsyncTracking;
 
@@ -176,23 +163,19 @@ namespace Unity.XR.PXR.Editor
                 //hand tracking Support
                 var handSupport = new GUIContent();
                 handSupport.text = "Hand Tracking Support";
-                projectConfig.handTrackingSupportType =
-                    (HandTrackingSupport)EditorGUILayout.EnumPopup(handSupport, projectConfig.handTrackingSupportType);
+                projectConfig.handTrackingSupportType =(HandTrackingSupport)EditorGUILayout.EnumPopup(handSupport, projectConfig.handTrackingSupportType); 
             }
-
+          
             //Adaptive Hand Model
             var adaptiveContent = new GUIContent();
             adaptiveContent.text = "Adaptive Hand Model(PICO)";
-            adaptiveContent.tooltip =
-                "If this function is selected, the hand model will change according to the actual size of the user's palm. Note that the hand model only works on PICO.";
+            adaptiveContent.tooltip = "If this function is selected, the hand model will change according to the actual size of the user's palm. Note that the hand model only works on PICO.";
             projectConfig.adaptiveHand = EditorGUILayout.Toggle(adaptiveContent, projectConfig.adaptiveHand);
             //high frequency tracking
             var highfrequencytracking = new GUIContent();
             highfrequencytracking.text = "High Frequency Tracking(60Hz)";
-            highfrequencytracking.tooltip =
-                "If turned on, hand tracking will run at a higher tracking frequency, which will improve the smoothness of hand tracking, but the power consumption will increase.";
-            projectConfig.highFrequencyHand =
-                EditorGUILayout.Toggle(highfrequencytracking, projectConfig.highFrequencyHand);
+            highfrequencytracking.tooltip = "If turned on, hand tracking will run at a higher tracking frequency, which will improve the smoothness of hand tracking, but the power consumption will increase.";
+            projectConfig.highFrequencyHand = EditorGUILayout.Toggle(highfrequencytracking, projectConfig.highFrequencyHand);
             //body tracking
             var bodyContent = new GUIContent();
             bodyContent.text = "Body Tracking";
@@ -200,8 +183,7 @@ namespace Unity.XR.PXR.Editor
             manager.bodyTracking = projectConfig.bodyTracking;
 
             // content protect
-            projectConfig.useContentProtect =
-                EditorGUILayout.Toggle("Use Content Protect", projectConfig.useContentProtect);
+            projectConfig.useContentProtect = EditorGUILayout.Toggle("Use Content Protect", projectConfig.useContentProtect);
 
             //MRC
             var mrcContent = new GUIContent();
@@ -220,21 +202,16 @@ namespace Unity.XR.PXR.Editor
                         layerNames[i] = "LayerName " + i.ToString();
                     }
                 }
-
-                manager.foregroundLayerMask =
-                    EditorGUILayout.MaskField("Foreground Layer Masks", manager.foregroundLayerMask, layerNames);
-                manager.backgroundLayerMask =
-                    EditorGUILayout.MaskField("Background Layer Masks", manager.backgroundLayerMask, layerNames);
+                manager.foregroundLayerMask = EditorGUILayout.MaskField("Foreground Layer Masks", manager.foregroundLayerMask, layerNames);
+                manager.backgroundLayerMask = EditorGUILayout.MaskField("Background Layer Masks", manager.backgroundLayerMask, layerNames);
                 EditorGUILayout.EndVertical();
             }
-
             //Late Latching
             projectConfig.latelatching = EditorGUILayout.Toggle("Use Late Latching", projectConfig.latelatching);
             manager.lateLatching = projectConfig.latelatching;
             if (manager.lateLatching)
             {
-                projectConfig.latelatchingDebug =
-                    EditorGUILayout.Toggle("  Late Latching Debug", projectConfig.latelatchingDebug);
+                projectConfig.latelatchingDebug = EditorGUILayout.Toggle("  Late Latching Debug", projectConfig.latelatchingDebug);
                 manager.latelatchingDebug = projectConfig.latelatchingDebug;
             }
 
@@ -263,19 +240,15 @@ namespace Unity.XR.PXR.Editor
             if (QualitySettings.renderPipeline != null)
             {
                 EditorGUI.BeginDisabledGroup(true);
-                projectConfig.enableRecommendMSAA =
-                    EditorGUILayout.Toggle("Use Recommended MSAA", projectConfig.enableRecommendMSAA);
+                projectConfig.enableRecommendMSAA = EditorGUILayout.Toggle("Use Recommended MSAA", projectConfig.enableRecommendMSAA);
                 manager.useRecommendedAntiAliasingLevel = projectConfig.enableRecommendMSAA;
                 EditorGUI.EndDisabledGroup();
-                EditorGUILayout.HelpBox(
-                    "A Scriptable Render Pipeline is in use,the 'Use Recommended MSAA' will not be used. ",
-                    MessageType.Info, true);
+                EditorGUILayout.HelpBox("A Scriptable Render Pipeline is in use,the 'Use Recommended MSAA' will not be used. ", MessageType.Info, true);
                 projectConfig.recommendMSAA = false;
             }
             else
             {
-                projectConfig.enableRecommendMSAA =
-                    EditorGUILayout.Toggle("Use Recommended MSAA", projectConfig.enableRecommendMSAA);
+                projectConfig.enableRecommendMSAA = EditorGUILayout.Toggle("Use Recommended MSAA", projectConfig.enableRecommendMSAA);
                 manager.useRecommendedAntiAliasingLevel = projectConfig.enableRecommendMSAA;
                 if (!projectConfig.enableRecommendMSAA)
                 {
@@ -286,8 +259,7 @@ namespace Unity.XR.PXR.Editor
             //Adaptive Resolution
             guiContent = new GUIContent();
             guiContent.text = "Adaptive Resolution";
-            guiContent.tooltip =
-                "Adaptively change resolution based on GPU performance using renderViewportScale. Render buffer will be allocated to max adaptive resolution scale size. Currently, FFR should be disabled with this feature.";
+            guiContent.tooltip = "Adaptively change resolution based on GPU performance using renderViewportScale. Render buffer will be allocated to max adaptive resolution scale size. Currently, FFR should be disabled with this feature.";
             projectConfig.adaptiveResolution = EditorGUILayout.Toggle(guiContent, projectConfig.adaptiveResolution);
             manager.adaptiveResolution = projectConfig.adaptiveResolution;
             if (manager.adaptiveResolution)
@@ -296,13 +268,12 @@ namespace Unity.XR.PXR.Editor
                 manager.minEyeTextureScale = EditorGUILayout.Slider(manager.minEyeTextureScale, 0.7f, 1.3f);
                 EditorGUILayout.LabelField("Max Adaptive Resolution Scale:");
                 manager.maxEyeTextureScale = EditorGUILayout.Slider(manager.maxEyeTextureScale, 0.7f, 1.3f);
-                manager.adaptiveResolutionPowerSetting =
-                    (AdaptiveResolutionPowerSetting)EditorGUILayout.EnumPopup(" Power Setting",
-                        manager.adaptiveResolutionPowerSetting);
+                manager.adaptiveResolutionPowerSetting = (AdaptiveResolutionPowerSetting)EditorGUILayout.EnumPopup(" Power Setting", manager.adaptiveResolutionPowerSetting);
+
             }
 
-#if UNITY_2021_1_OR_NEWER
-            XROrigin xrOrigin = FindObjectOfType<XROrigin>();
+#if UNITY_2021_3_OR_NEWER
+            XROrigin xrOrigin = FindAnyObjectByType<XROrigin>();
 #else
             XROrigin xrOrigin = FindObjectOfType<XROrigin>();
 #endif
@@ -328,7 +299,7 @@ namespace Unity.XR.PXR.Editor
             {
                 projectConfig.meshLod = (PxrMeshLod)EditorGUILayout.EnumPopup(" LOD", projectConfig.meshLod);
             }
-
+            projectConfig.planeDetection = EditorGUILayout.Toggle("Plane Detection", projectConfig.planeDetection);
             EditorGUILayout.EndVertical();
             //mr safeguard
 
@@ -338,25 +309,25 @@ namespace Unity.XR.PXR.Editor
                 "MR safety, if you choose this option, your application will adopt MR safety policies during runtime. If not selected, it will continue to use VR safety policies by default.";
             projectConfig.mrSafeguard = EditorGUILayout.Toggle(mrSafeguardContent, projectConfig.mrSafeguard);
 
+            var secureMRContent = new GUIContent();
+            secureMRContent.text = "SecureMR";
+            projectConfig.secureMR = EditorGUILayout.Toggle(secureMRContent, projectConfig.secureMR);
+
             //Super Resolution
             var superresolutionContent = new GUIContent();
             superresolutionContent.text = "Super Resolution";
-            superresolutionContent.tooltip =
-                "Single pass spatial aware upscaling technique.\n\nThis can't be used with Sharpening. \nAlso can't be used along with subsample feature due to unsupported texture format. \n\nThis effect won't work properly under low resolutions when Adaptive Resolution is also enabled.";
-            projectConfig.superResolution =
-                EditorGUILayout.Toggle(superresolutionContent, projectConfig.superResolution);
+            superresolutionContent.tooltip = "Single pass spatial aware upscaling technique.\n\nThis can't be used with Sharpening. \nAlso can't be used along with subsample feature due to unsupported texture format. \n\nThis effect won't work properly under low resolutions when Adaptive Resolution is also enabled.";
+            projectConfig.superResolution = EditorGUILayout.Toggle(superresolutionContent, projectConfig.superResolution);
             manager.enableSuperResolution = projectConfig.superResolution;
 
             //Sharpening
 
             var sharpeningContent = new GUIContent();
             sharpeningContent.text = "Sharpening Mode";
-            sharpeningContent.tooltip =
-                "Normal: Normal Quality \n\nQuality: Higher Quality, higher GPU usage\n\nThis effect won't work properly under low resolutions when Adaptive Resolution is also enabled.\n\nThis can't be used with Super Resolution. It will be automatically disabled when you enable Super Resolution. \nAlso can't be used along with subsample feature due to unsupported texture format";
+            sharpeningContent.tooltip = "Normal: Normal Quality \n\nQuality: Higher Quality, higher GPU usage\n\nThis effect won't work properly under low resolutions when Adaptive Resolution is also enabled.\n\nThis can't be used with Super Resolution. It will be automatically disabled when you enable Super Resolution. \nAlso can't be used along with subsample feature due to unsupported texture format";
             var sharpeningEnhanceContent = new GUIContent();
             sharpeningEnhanceContent.text = "Sharpening Enhance Mode";
-            sharpeningEnhanceContent.tooltip =
-                "None: Full screen will be sharpened\n\nFixed Foveated: Only the central fixation point will be sharpened\n\nSelf Adaptive: Only when contrast between the current pixel and the surrounding pixels exceeds a certain threshold will be sharpened.\n\nThis menu will be only enabled while Sharpening (either Normal or Quality) is enabled.";
+            sharpeningEnhanceContent.tooltip = "None: Full screen will be sharpened\n\nFixed Foveated: Only the central fixation point will be sharpened\n\nSelf Adaptive: Only when contrast between the current pixel and the surrounding pixels exceeds a certain threshold will be sharpened.\n\nThis menu will be only enabled while Sharpening (either Normal or Quality) is enabled.";
 
             if (projectConfig.superResolution)
             {
@@ -364,21 +335,19 @@ namespace Unity.XR.PXR.Editor
                 manager.sharpeningMode = SharpeningMode.None;
                 manager.sharpeningEnhance = SharpeningEnhance.None;
             }
-            else
+            else 
             {
                 GUI.enabled = true;
             }
 
-            manager.sharpeningMode =
-                (SharpeningMode)EditorGUILayout.EnumPopup(sharpeningContent, manager.sharpeningMode);
+            manager.sharpeningMode = (SharpeningMode)EditorGUILayout.EnumPopup(sharpeningContent, manager.sharpeningMode);
             if (manager.sharpeningMode == SharpeningMode.None)
             {
                 manager.sharpeningEnhance = SharpeningEnhance.None;
             }
             else
             {
-                manager.sharpeningEnhance =
-                    (SharpeningEnhance)EditorGUILayout.EnumPopup(sharpeningEnhanceContent, manager.sharpeningEnhance);
+                manager.sharpeningEnhance = (SharpeningEnhance)EditorGUILayout.EnumPopup(sharpeningEnhanceContent, manager.sharpeningEnhance);
             }
 
             if (manager.sharpeningMode != SharpeningMode.None)
@@ -423,12 +392,47 @@ namespace Unity.XR.PXR.Editor
                 projectConfig.selfAdaptiveSharpening = false;
             }
 
+            var usePremultipliedAlphaContent = new GUIContent();
+            usePremultipliedAlphaContent.text = "Use Premultiplied Alpha";
+            usePremultipliedAlphaContent.tooltip = @"Enable premultiplied alpha for this content.
+
+When enabled:
+• RGB color channels are multiplied by Alpha (R*A, G*A, B*A)
+• Improves performance for transparent elements (e.g., UI, particles)
+• Fixes edge artifacts in semitransparent objects
+• Matches OpenXR and GPU blending requirements
+
+Recommended for:
+• UI panels with transparency
+• Particle effects
+• Materials using alpha blending
+• Any content requiring frequent transparency mixing
+
+Note: Ensure textures are imported with 'Alpha Is Transparency' 
+or manually pre-multiply colors if needed.";
+            manager.usePremultipliedAlpha = EditorGUILayout.Toggle(usePremultipliedAlphaContent, manager.usePremultipliedAlpha);
+
+            guiContent.text = "Layer Blend";
+            manager.useLayerBlend = EditorGUILayout.Toggle(guiContent, manager.useLayerBlend);
+            if (manager.useLayerBlend)
+            {
+                EditorGUILayout.BeginVertical("frameBox");
+                guiContent.text = "Src Color";
+                manager.srcColor = (PxrBlendFactor)EditorGUILayout.EnumPopup(guiContent, manager.srcColor);
+                guiContent.text = "Dst Color";
+                manager.dstColor = (PxrBlendFactor)EditorGUILayout.EnumPopup(guiContent, manager.dstColor);
+                guiContent.text = "Src Alpha";
+                manager.srcAlpha = (PxrBlendFactor)EditorGUILayout.EnumPopup(guiContent, manager.srcAlpha);
+                guiContent.text = "Dst Alpha";
+                manager.dstAlpha = (PxrBlendFactor)EditorGUILayout.EnumPopup(guiContent, manager.dstAlpha);
+
+                EditorGUILayout.EndVertical();
+            }
             if (GUI.changed)
             {
                 EditorUtility.SetDirty(projectConfig);
                 EditorUtility.SetDirty(manager);
             }
-
             serializedObject.ApplyModifiedProperties();
         }
 
@@ -439,3 +443,4 @@ namespace Unity.XR.PXR.Editor
         }
     }
 }
+#endif

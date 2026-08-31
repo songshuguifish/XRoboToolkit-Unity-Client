@@ -5,7 +5,9 @@ using Unity.XR.PXR;
 using UnityEngine.UI;
 using System;
 using static UnityEngine.UI.Dropdown;
-
+#if PICO_OPENXR_SDK
+using Unity.XR.OpenXR.Features.PICOSupport;
+#endif
 public class PXR_BodyTrackingDebugBlock : MonoBehaviour
 {
     public Transform skeletonJoints;
@@ -24,7 +26,8 @@ public class PXR_BodyTrackingDebugBlock : MonoBehaviour
     private BodyTrackingData bd = new BodyTrackingData();
     private Transform[] boneMapping = new Transform[(int)BodyTrackerRole.ROLE_NUM];
     private Transform[] targetMapping = new Transform[(int)BodyTrackerRole.ROLE_NUM];
-
+    BodyTrackingStatus bs = new BodyTrackingStatus();
+    bool istracking = false;
 
     // Start is called before the first frame update
     void Start()
@@ -43,15 +46,32 @@ public class PXR_BodyTrackingDebugBlock : MonoBehaviour
     // Update is called once per frame
     void Update()
     {
-        // Get the current tracking mode, either bodytracking or motiontracking.
-        MotionTrackerMode trackingMode = PXR_MotionTracking.GetMotionTrackerMode();
 
 #if UNITY_ANDROID
         // Update bodytracking pose.
-        if (updateBT && trackingMode == MotionTrackerMode.BodyTracking)
+        if (updateBT)
         {
+            
+#if PICO_OPENXR_SDK
+            BodyTrackingFeature.GetBodyTrackingState(ref istracking, ref bs);
+#else
+            PXR_MotionTracking.GetBodyTrackingState(ref istracking, ref bs);
+#endif
+            // If not calibrated, invoked system motion tracker app for calibration.
+            if (bs.stateCode!=BodyTrackingStatusCode.BT_VALID)
+            {
+                return;
+            }
             // Get the position and orientation data of each body node.
-            int ret = PXR_MotionTracking.GetBodyTrackingData(ref bdi, ref bd);
+            int ret = -1;
+
+#if PICO_OPENXR_SDK
+            ret = BodyTrackingFeature.GetBodyTrackingData(ref bdi, ref bd);
+#else
+            ret = PXR_MotionTracking.GetBodyTrackingData(ref bdi, ref bd);
+#endif
+
+            
 
             // if the return is successful
             if (ret == 0)
@@ -74,7 +94,13 @@ public class PXR_BodyTrackingDebugBlock : MonoBehaviour
     public void StartBodyTracking()
     {
         // Query whether the current device supports human body tracking.
+
+#if PICO_OPENXR_SDK
+        supportedBT= BodyTrackingFeature.IsBodyTrackingSupported();
+#else 
         PXR_MotionTracking.GetBodyTrackingSupported(ref supportedBT);
+#endif
+       
         if (!supportedBT)
         {
             return;
@@ -82,21 +108,29 @@ public class PXR_BodyTrackingDebugBlock : MonoBehaviour
         BodyTrackingBoneLength bones = new BodyTrackingBoneLength();
 
         // Start BodyTracking
-        PXR_MotionTracking.StartBodyTracking(BodyTrackingMode.BTM_FULL_BODY_HIGH, bones);
 
-        int calibrated = -1;
-        // Has Pico motion tracker completed calibration (0: not completed; 1: completed)?
-        PXR_Input.GetMotionTrackerCalibState(ref calibrated);
+#if PICO_OPENXR_SDK
+        BodyTrackingFeature.StartBodyTracking(BodyJointSet.BODY_JOINT_SET_BODY_FULL_START, bones);
+        BodyTrackingFeature.GetBodyTrackingState(ref istracking, ref bs);
+#else 
+        PXR_MotionTracking.StartBodyTracking(BodyJointSet.BODY_JOINT_SET_BODY_FULL_START, bones);
+        PXR_MotionTracking.GetBodyTrackingState(ref istracking, ref bs);
+#endif
+
 
         // If not calibrated, invoked system motion tracker app for calibration.
-        if (calibrated != 1)
+        if (bs.stateCode!=BodyTrackingStatusCode.BT_VALID)
         {
-            PXR_MotionTracking.StartMotionTrackerCalibApp();
-        }
+            if (bs.message==BodyTrackingMessage.BT_MESSAGE_TRACKER_NOT_CALIBRATED||bs.message==BodyTrackingMessage.BT_MESSAGE_UNKNOWN)
+            {
 
-        bool istracking = false;
-        BodyTrackingState bs = new BodyTrackingState();
-        int ret = PXR_MotionTracking.GetBodyTrackingState(ref istracking, ref bs);
+#if PICO_OPENXR_SDK
+                BodyTrackingFeature.StartMotionTrackerCalibApp();
+#else 
+                PXR_MotionTracking.StartMotionTrackerCalibApp();
+#endif
+            }
+        }
 
         skeletonJoints.gameObject.SetActive(true);
         updateBT = true;
@@ -104,7 +138,13 @@ public class PXR_BodyTrackingDebugBlock : MonoBehaviour
 
     private void OnDestroy()
     {
+
+#if PICO_OPENXR_SDK
+        int ret = BodyTrackingFeature.StopBodyTracking();
+#else
         int ret = PXR_MotionTracking.StopBodyTracking();
+#endif
+        
         updateBT = false;
     }
 

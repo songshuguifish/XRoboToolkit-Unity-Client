@@ -22,12 +22,12 @@ using UnityEngine.XR;
 
 namespace Unity.XR.PXR
 {
+    [Obsolete("PXR_OverLay is obsolete and will be removed in the next version. Please use PXR_CompositionLayer instead.", false)]
     public class PXR_OverLay : MonoBehaviour, IComparable<PXR_OverLay>
     {
         private const string TAG = "[PXR_CompositeLayers]";
         public static List<PXR_OverLay> Instances = new List<PXR_OverLay>();
 
-        private static int overlayID = 0;
         [NonSerialized]
         public int overlayIndex;
         public int layerDepth;
@@ -121,10 +121,6 @@ namespace Unity.XR.PXR
         public bool enableSubmitLayer = true;
         public PXR_OverLay originalOverLay;
         public IntPtr layerSubmitPtr = IntPtr.Zero;
-        public APIExecutionStatus Quad2Status = APIExecutionStatus.None;
-        public APIExecutionStatus Cylinder2Status = APIExecutionStatus.None;
-        public APIExecutionStatus Equirect2Status = APIExecutionStatus.None;
-
 
         [HideInInspector]
         public SuperSamplingMode supersamplingMode = SuperSamplingMode.None;
@@ -254,24 +250,15 @@ namespace Unity.XR.PXR
                 overlayParam.height = 1024;
             }
 
-            overlayID++;
-            overlayIndex = overlayID;
+            PXR_CompositionLayer.overlayID++;
+            overlayIndex = PXR_CompositionLayer.overlayID;
             overlayParam.layerId = overlayIndex;
-            overlayParam.layerShape = overlayShape == 0 ? OverlayShape.Quad : overlayShape;
-            overlayParam.layerType = overlayType;
+            overlayParam.layerShape = (PXR_CompositionLayer.OverlayShape)(overlayShape == 0 ? OverlayShape.Quad : overlayShape);
+            overlayParam.layerType = (PXR_CompositionLayer.OverlayType)overlayType;
             overlayParam.arraySize = 1;
             overlayParam.mipmapCount = 1;
             overlayParam.sampleCount = 1;
             overlayParam.layerFlags = 0;
-
-            if (GraphicsDeviceType.Vulkan == SystemInfo.graphicsDeviceType)
-            {
-                overlayParam.format = QualitySettings.activeColorSpace == ColorSpace.Linear ? (UInt64)ColorForamt.VK_FORMAT_R8G8B8A8_SRGB : (UInt64)RenderTextureFormat.Default;
-            }
-            else
-            {
-                overlayParam.format = QualitySettings.activeColorSpace == ColorSpace.Linear ? (UInt64)ColorForamt.GL_SRGB8_ALPHA8 : (UInt64)RenderTextureFormat.Default;
-            }
 
             if (OverlayShape.Cubemap == overlayShape)
             {
@@ -284,6 +271,31 @@ namespace Unity.XR.PXR
                 overlayParam.faceCount = 1;
                 if (textureM == null)
                     textureM = new Material(Shader.Find("PXR_SDK/PXR_Texture2DBlit"));
+            }
+
+            if (GraphicsDeviceType.Vulkan == SystemInfo.graphicsDeviceType)
+            {
+                if (ColorSpace.Linear == QualitySettings.activeColorSpace)
+                {
+                    overlayParam.format = (UInt64)ColorForamt.VK_FORMAT_R8G8B8A8_SRGB;
+                }
+                else
+                {
+                    overlayParam.format = (UInt64)ColorForamt.VK_FORMAT_R8G8B8A8_UNORM;
+
+                    if (OverlayShape.Cubemap == overlayShape)
+                    {
+                        cubeM.SetFloat("_Gamma", 2.2f);
+                    }
+                    else
+                    {
+                        textureM.SetFloat("_Gamma", 2.2f);
+                    }
+                }
+            }
+            else
+            {
+                overlayParam.format = (UInt64)ColorForamt.GL_SRGB8_ALPHA8;
             }
 
             if (isClones)
@@ -328,13 +340,7 @@ namespace Unity.XR.PXR
                     overlayParam.layerFlags |= (UInt32)PxrLayerCreateFlags.PxrLayerFlag3DTopBottomSurface;
                 }
 
-                overlayParam.layerLayout = LayerLayout.Mono;
-
-                PLog.i(TAG, $"UPxr_CreateLayer() overlayParam.layerId={overlayParam.layerId}, layerShape={overlayParam.layerShape}, layerType={overlayParam.layerType}, width={overlayParam.width}, height={overlayParam.height}, layerFlags={overlayParam.layerFlags}, format={overlayParam.format}, layerLayout={overlayParam.layerLayout}.");
-                IntPtr layerParamPtr = Marshal.AllocHGlobal(Marshal.SizeOf(overlayParam));
-                Marshal.StructureToPtr(overlayParam, layerParamPtr, false);
-                PXR_Plugin.Render.UPxr_CreateLayer(layerParamPtr);
-                Marshal.FreeHGlobal(layerParamPtr);
+                overlayParam.layerLayout = (PXR_CompositionLayer.LayerLayout)LayerLayout.Mono;
             }
             else
             {
@@ -346,18 +352,19 @@ namespace Unity.XR.PXR
                 if ((layerTextures[0] != null && layerTextures[1] != null && layerTextures[0] == layerTextures[1]) || null == layerTextures[1])
                 {
                     eyeCount = 1;
-                    overlayParam.layerLayout = LayerLayout.Mono;
+                    overlayParam.layerLayout = (PXR_CompositionLayer.LayerLayout)LayerLayout.Mono;
                 }
                 else
                 {
                     eyeCount = 2;
-                    overlayParam.layerLayout = LayerLayout.Stereo;
+                    overlayParam.layerLayout = (PXR_CompositionLayer.LayerLayout)LayerLayout.Stereo;
                 }
 
-                PXR_Plugin.Render.UPxr_CreateLayerParam(overlayParam);
                 toCreateSwapChain = true;
-                CreateTexture();
             }
+
+            PLog.i(TAG, $"UPxr_CreateLayer() overlayParam.layerId={overlayParam.layerId}, layerShape={overlayParam.layerShape}, layerType={overlayParam.layerType}, width={overlayParam.width}, height={overlayParam.height}, layerFlags={overlayParam.layerFlags}, format={overlayParam.format}, layerLayout={overlayParam.layerLayout}.");
+            PXR_Plugin.Render.UPxr_CreateLayerParam(overlayParam);
         }
 
         public void CreateExternalSurface(PXR_OverLay overlayInstance)
@@ -491,12 +498,10 @@ namespace Unity.XR.PXR
             {
                 return false;
             }
-            if (GraphicsDeviceType.Vulkan != SystemInfo.graphicsDeviceType)
+
+            if (enableSubmitLayer)
             {
-                if (enableSubmitLayer)
-                {
-                    PXR_Plugin.Render.UPxr_GetLayerNextImageIndexByRender(overlayIndex, ref imageIndex);
-                }
+                PXR_Plugin.Render.UPxr_GetLayerNextImageIndexByRender(overlayIndex, ref imageIndex);
             }
             for (int i = 0; i < eyeCount; i++)
             {
@@ -636,7 +641,7 @@ namespace Unity.XR.PXR
         {
             if (isExternalAndroidSurface)
             {
-                PXR_Plugin.Render.UPxr_DestroyLayer(overlayIndex);
+                PXR_Plugin.Render.UPxr_DestroyLayerByRender(overlayIndex);
                 externalAndroidSurfaceObject = IntPtr.Zero;
                 ClearTexture();
                 return;
@@ -783,7 +788,7 @@ namespace Unity.XR.PXR
         {
             Quad = 1,
             Cylinder = 2,
-            Equirect = 3,
+            Equirect = 4,
             Cubemap = 5,
             Eac = 6,
             Fisheye = 7,
@@ -845,13 +850,6 @@ namespace Unity.XR.PXR
             VK_FORMAT_R8G8B8A8_SRGB = 43,
             GL_SRGB8_ALPHA8 = 0x8c43,
             GL_RGBA8 = 0x8058
-        }
-
-        public enum APIExecutionStatus
-        {
-            None,
-            True,
-            False
         }
 
         public enum BlurredQuadMode

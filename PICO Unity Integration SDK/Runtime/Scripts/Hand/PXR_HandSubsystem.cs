@@ -1,4 +1,5 @@
-﻿/*******************************************************************************
+﻿#if !PICO_OPENXR_SDK
+/*******************************************************************************
 Copyright © 2015-2022 PICO Technology Co., Ltd.All rights reserved.  
 
 NOTICE：All information contained herein is, and remains the property of 
@@ -221,7 +222,6 @@ namespace Unity.XR.PXR
                 UpdateSuccessFlags ret = UpdateSuccessFlags.None;
 
                 const int handRootIndex = (int)HandJoint.JointWrist;
-
                 if (PXR_HandTracking.GetJointLocations(HandType.HandLeft, ref jointLocations))
                 {
                     if (jointLocations.isActive != 0U)
@@ -239,11 +239,14 @@ namespace Unity.XR.PXR
                                 ret |= UpdateSuccessFlags.LeftHandRootPose;
                             }
                         }
-                        
+#if UNITY_EDITOR
+                        ret |= UpdateSuccessFlags.LeftHandJoints;
+#else
                         if (PicoAimHand.left.UpdateHand(HandType.HandLeft, (ret & UpdateSuccessFlags.LeftHandRootPose) != 0))
                         {
-                            ret  |= UpdateSuccessFlags.LeftHandJoints;
+                            ret |= UpdateSuccessFlags.LeftHandJoints;
                         }
+#endif
                     }
                 }
 
@@ -264,10 +267,15 @@ namespace Unity.XR.PXR
                             }
 
                         }
+                        
+#if UNITY_EDITOR
+                        ret |= UpdateSuccessFlags.RightHandJoints;
+#else
                         if (PicoAimHand.right.UpdateHand(HandType.HandRight, (ret & UpdateSuccessFlags.RightHandRootPose) != 0))
                         {
                             ret |=   UpdateSuccessFlags.RightHandJoints;
                         }
+#endif
                     }
                 }
 
@@ -438,8 +446,19 @@ namespace Unity.XR.PXR
                 else if ((deviceDescriptor.characteristics & InputDeviceCharacteristics.Right) != 0)
                     InputSystem.SetDeviceUsage(this, UnityEngine.InputSystem.CommonUsages.RightHand);
             }
+            PXR_Plugin.System.FocusStateAcquired += OnFocusStateAcquired;
         }
 
+        private void OnFocusStateAcquired()
+        {
+            m_WasTracked = false;
+        }
+
+        protected override void OnRemoved()
+        {
+            PXR_Plugin.System.FocusStateAcquired -= OnFocusStateAcquired;
+            base.OnRemoved();
+        }
         /// <summary>
         /// Creates a <see cref="PicoAimHand"/> and adds it to the Input System.
         /// </summary>
@@ -600,3 +619,4 @@ namespace Unity.XR.PXR
 }
 
 #endif //XR_HANDS
+#endif

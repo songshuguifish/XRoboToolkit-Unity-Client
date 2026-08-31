@@ -2,13 +2,13 @@
 using System.Collections;
 using System.Collections.Generic;
 using LitJson;
-using UnityEngine;
-using UnityEngine.XR;
-#if PICO_XR
-using Unity.XR.PXR;
-#else
+#if PICO_OPENXR_SDK
 using Unity.XR.OpenXR.Features.PICOSupport;
 #endif
+using Unity.XR.PXR;
+using UnityEngine;
+using UnityEngine.XR;
+
 
 namespace Unity.XR.PICO.TOBSupport
 {
@@ -26,15 +26,13 @@ namespace Unity.XR.PICO.TOBSupport
             YOffset = cameraYOffset;
             mCallback = callback;
             mlist.Clear();
-#if PICO_XR
-#else
+#if PICO_OPENXR_SDK
             OpenXRExtensions.SetMarkMode();
 #endif
         }
 
         public void CallBack(string var1)
         {
-            Debug.Log("ToBService MarkerInfo Callback 回调:" + var1);
             List<MarkerInfo> tmp = JsonToMarkerInfos(var1);
             PXR_EnterpriseTools.QueueOnMainThread(() =>
             {
@@ -57,13 +55,11 @@ namespace Unity.XR.PICO.TOBSupport
             IDictionary dictionary = jsonData as IDictionary;
             for (int i = 0; i < dictionary.Count; i++)
             {
-                Debug.Log("TOB TestDemo---- MarkerInfo Callback 回调:1");
-
                 float OriginHeight = 0;
                 if (TrackingMode == TrackingOriginModeFlags.Device || TrackingMode == TrackingOriginModeFlags.Floor)
                 {
               
-#if PICO_XR
+#if !PICO_OPENXR_SDK
                     OriginHeight = PXR_Plugin.System.UPxr_GetConfigFloat(ConfigType.ToDelaSensorY);
 #else
                     float trackingorigin_height = PXR_EnterprisePlugin.oxr_get_trackingorigin_height();
@@ -87,7 +83,6 @@ namespace Unity.XR.PICO.TOBSupport
                     YOffset = 0;
                 } 
    
-                Debug.Log("TOB TestDemo---- MarkerInfo Callback 回调:OriginHeight："+OriginHeight );
                 MarkerInfo model = new MarkerInfo();
                 model.posX = double.Parse(jsonData[i]["posX"].ToString());
                 model.posY = double.Parse(jsonData[i]["posY"].ToString()) + OriginHeight + YOffset;

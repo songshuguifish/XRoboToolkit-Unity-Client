@@ -38,10 +38,44 @@ public class UIExtraDevPanel : MonoBehaviour
         Test();
        return;
 #endif
-        ExtDevTrackerConnectState connectState = new ExtDevTrackerConnectState();
-        PXR_MotionTracking.GetExtDevTrackerConnectState(ref connectState);
+        ExtDevTrackerConnectState connectState = BuildCurrentConnectState();
         Debug.Log("connectState.extNumber:" + connectState.extNumber);
         RefreshUI(connectState);
+    }
+
+    private static ExtDevTrackerConnectState BuildCurrentConnectState()
+    {
+        int result = PXR_MotionTracking.GetExpandDevice(out long[] deviceIds);
+        if (result != 0 || deviceIds == null)
+        {
+            return new ExtDevTrackerConnectState
+            {
+                extNumber = 0,
+                info = Array.Empty<ExtDevTrackerInfo>()
+            };
+        }
+
+        ExtDevTrackerInfo[] info = new ExtDevTrackerInfo[deviceIds.Length];
+        for (int i = 0; i < deviceIds.Length; i++)
+        {
+            float battery = 0f;
+            XrBatteryChargingState charging =
+                XrBatteryChargingState.XR_MOTION_TRACKER_CHARGING_STATE_UNCHARGED;
+            PXR_MotionTracking.GetExpandDeviceBattery(
+                deviceIds[i], ref battery, ref charging);
+            info[i] = new ExtDevTrackerInfo
+            {
+                trackerSN = new TrackerSN { value = deviceIds[i].ToString() },
+                batteryVolume = (byte)Mathf.Clamp(Mathf.RoundToInt(battery * 10f), 0, 10),
+                chargerStatus = (byte)charging
+            };
+        }
+
+        return new ExtDevTrackerConnectState
+        {
+            extNumber = deviceIds.Length,
+            info = info
+        };
     }
 
     [ContextMenu("Test")]
@@ -91,7 +125,8 @@ public class UIExtraDevPanel : MonoBehaviour
             item.gameObject.SetActive(true);
         }
 
-        for (int i = connectState.info.Length; i < parent.childCount; i++)
+        int infoLength = connectState.info == null ? 0 : connectState.info.Length;
+        for (int i = infoLength; i < parent.childCount; i++)
         {
             parent.GetChild(i).gameObject.SetActive(false);
         }

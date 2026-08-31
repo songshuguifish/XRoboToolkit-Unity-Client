@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text;
 using Network;
 using Unity.XR.PXR;
@@ -8,8 +9,6 @@ namespace Robot
     public class ExtDevTracking : MonoBehaviour
     {
         private bool _enable = false;
-        private int _realLength = 0;
-        private ExtDevTrackerPassDataArray _passDataArray = new ExtDevTrackerPassDataArray();
 
         public void Start()
         {
@@ -31,11 +30,16 @@ namespace Robot
         {
             if (_enable)
             {
-                int result = PXR_MotionTracking.GetExtDevTrackerByPassData(ref _passDataArray, ref _realLength);
-                for (int i = 0; i < _realLength; i++)
+                int result = PXR_MotionTracking.GetExpandDeviceCustomData(
+                    out List<ExpandDevicesCustomData> passData);
+                if (result != 0 || passData == null)
                 {
-                    ExtDevTrackerPassData passData = _passDataArray.passDatas[i];
-                    PackageSend(passData);
+                    return;
+                }
+
+                for (int i = 0; i < passData.Count; i++)
+                {
+                    PackageSend(passData[i]);
                 }
             }
         }
@@ -66,10 +70,12 @@ namespace Robot
             TcpHandler.SendCustomData(package);
         }
 
-        private void PackageSend(ExtDevTrackerPassData passData)
+        private void PackageSend(ExpandDevicesCustomData passData)
         {
-            byte[] package = PackageHandle.CustomPacket(CustomDataType.TRACKER_EXTRA_DEVICE, passData.trackerSN.value,
-                passData.passData);
+            byte[] package = PackageHandle.CustomPacket(
+                CustomDataType.TRACKER_EXTRA_DEVICE,
+                passData.deviceId.ToString(),
+                passData.data);
             TcpHandler.SendCustomData(package);
         }
 

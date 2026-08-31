@@ -13,6 +13,7 @@ PICO Technology Co., Ltd.
 using System;
 using System.Collections.Generic;
 using AOT;
+using Unity.XR.PXR;
 using UnityEngine;
 using UnityEngine.Android;
 using UnityEngine.XR;
@@ -88,6 +89,11 @@ namespace Unity.XR.PICO.TOBSupport
         /// * `CAMERA_TEMPERATURE_CELSIUS`: camera's temperature in Celsius
         /// * `CAMERA_TEMPERATURE_FAHRENHEIT`: camera's temperature in Fahrenheit
         /// * `LARGESPACE_MAP_INFO`: large space map information
+        /// * `CURRENT_CHARGING_PROTOCOL`: the charging protocol
+        /// * `USB_PWOER_MAX`: the maximum charging power
+        /// * `HMD_POSITION_AND_ORIENTATION`: the position and orientation of the HMD
+        /// * `PSENSOR_STATUS`: the status of PSensor
+        /// * `LARGE_SPACE_MAP_SCALE`: the scale of the large-space map
         /// </param>
         /// <param name="ext">Reserved parameter. Default to `0`.</param>
         /// <returns>The specified type of device information. For `CHARGING_STATUS`, an int value will be returned: `2`-charging; `3`-not charging.</returns>
@@ -369,6 +375,21 @@ namespace Unity.XR.PICO.TOBSupport
         /// * `SFS_USB_TETHERING`: USB tethering
         /// * `SFS_REAL_TIME_RESPONSE_HMD_BACK_KEY_IN_VR_APP`: Respond to the headset's Back button in real-time for VR apps. Switch on: When the headset's Back button is pressed, a `DOWN` event is sent, and when released, an `UP` event is sent. Switch off: When the headset's Back button is pressed, no `DOWN` event is sent, but when the button is released, both a `DOWN` and an `UP` event are sent simultaneously
         /// * `SFS_RETRIEVE_MAP_BY_MARKER_FIRST`: Prioritize using the marker point to relocate on the map
+        /// * `SFS_CONTROLLER_STILL`: whether the controllers enter the still state
+        /// * `SFS_SHORTCUT_SHOW_PERFORMANCE_UI`: whether to display the Performance tab in shortcut settings (supported by PICO 4 Ultra with system version 5.13.0 or later)
+        /// * `SFS_BATTERY_STATUS_DISPLAY`: wherther to display battery state
+        /// * `SFS_QUICK_RELOCATION`: quick relocation
+        /// * `SFS_MIXED_INTERACTION_MODE`: toggle for mixed tracking mode
+        /// * `SFS_REMINDER_FOR_ABNORMAL_LOCATING`: reminder for abnormal locating
+        /// * `SFS_GESTURE_RECOGNITION_HOME_ENABLE_ON_DESKTOP`: HOME gesture toggle: in system desktop
+        /// * `SFS_GESTURE_RECOGNITION_RESET_ENABLE_ON_DESKTOP`: RESET gesture toggle: in system desktop
+        /// * `SFS_DISABLE_WINDOW_MEMORY_OPTIMIZATION`: disable window memory optimization strategy
+        /// * `SFS_IMMERSIVE_MODE`: system desktop immersive mode; valid value range: [0, 100]
+        /// * `SFS_GLOBAL_VST`: global VST
+        /// * `SFS_HAND_TRACKING_HOOK`: toggle for hand tracking injection
+        /// * `SFS_USB_TETHERING_STATIC_IP_ENABLED`: toggle for USB tethering with static IP
+        /// * `SFS_TRACKER_MODE`: tracking mode (`0`- body tracking; `1` - object tracking)
+        /// * `SFS_GUARDIAN_PERSISTENT_IMMERSION_MODE`: Guardian persistent immersive mode: do not auto-enter VST when leaving the play area (`0` — system default, no special handling; `1` — do not trigger VST)
         /// </param>
         /// <param name="switchEnum">Whether to switch the function on/off:
         /// * `S_ON`: switch on
@@ -391,60 +412,6 @@ namespace Unity.XR.PICO.TOBSupport
         public static void SwitchSetUsbConfigurationOption(USBConfigModeEnum uSBConfigModeEnum, int ext=0)
         {
             PXR_EnterprisePlugin.UPxr_SwitchSetUsbConfigurationOption(uSBConfigModeEnum,ext);
-        }
-
-        /// <summary>
-        /// Controls whether the tracking data exposed by the system includes predictions.
-        /// </summary>
-        /// <param name="enabled">True to enable predicted tracking data; false to disable it.</param>
-        /// <param name="ext">Reserved parameter. Pass 0.</param>
-        /// <returns>0 on success, or a device/service error code. Returns -1 when the service is unavailable.</returns>
-        public static int SetTrackingDataIncludingPredictions(bool enabled, int ext=0)
-        {
-            return PXR_EnterprisePlugin.UPxr_SetTrackingDataIncludingPredictions(enabled, ext);
-        }
-
-        /// <summary>
-        /// Gets whether the tracking data exposed by the system includes predictions.
-        /// </summary>
-        /// <param name="ext">Reserved parameter. Pass 0.</param>
-        /// <returns>1 when enabled, 0 when disabled, or -1 when the service is unavailable.</returns>
-        public static int GetTrackingDataIncludingPredictions(int ext=0)
-        {
-            return PXR_EnterprisePlugin.UPxr_GetTrackingDataIncludingPredictions(ext);
-        }
-
-        /// <summary>
-        /// Sets the static IPv4 addresses used by PICO USB tethering.
-        /// </summary>
-        /// <returns>0 on success, 1 on failure, 101 for equal addresses, or 102 for different /24 subnets.</returns>
-        public static int SetUsbTetheringStaticIP(string localAddr, string clientAddr)
-        {
-            return PXR_EnterprisePlugin.UPxr_SetUsbTetheringStaticIP(localAddr, clientAddr);
-        }
-
-        /// <summary>
-        /// Gets the PICO-side static IPv4 address used by USB tethering.
-        /// </summary>
-        public static string GetUsbTetheringStaticIPLocal()
-        {
-            return PXR_EnterprisePlugin.UPxr_GetUsbTetheringStaticIPLocal();
-        }
-
-        /// <summary>
-        /// Gets the PC-side static IPv4 address used by USB tethering.
-        /// </summary>
-        public static string GetUsbTetheringStaticIPClient()
-        {
-            return PXR_EnterprisePlugin.UPxr_GetUsbTetheringStaticIPClient();
-        }
-
-        /// <summary>
-        /// Enables use of the configured USB tethering static addresses.
-        /// </summary>
-        public static void EnableUsbTetheringStaticIP()
-        {
-            PXR_EnterprisePlugin.UPxr_EnableUsbTetheringStaticIP();
         }
 
         /// <summary>
@@ -1293,6 +1260,20 @@ namespace Unity.XR.PICO.TOBSupport
         /// * `SFS_USB_TETHERING`: USB tethering
         /// * `SFS_REAL_TIME_RESPONSE_HMD_BACK_KEY_IN_VR_APP`: Respond to the headset's Back button in real-time for VR apps. Switch on: When the headset's Back button is pressed, a `DOWN` event is sent, and when released, an `UP` event is sent. Switch off: When the headset's Back button is pressed, no `DOWN` event is sent, but when the button is released, both a `DOWN` and an `UP` event are sent simultaneously
         /// * `SFS_RETRIEVE_MAP_BY_MARKER_FIRST`: Prioritize using the marker point to relocate on the map
+        /// * `SFS_CONTROLLER_STILL`: whether the controllers enter the still state
+        /// * `SFS_SHORTCUT_SHOW_PERFORMANCE_UI`: whether to display the Performance tab in shortcut settings (supported by PICO 4 Ultra with system version 5.13.0 or later)
+        /// * `SFS_BATTERY_STATUS_DISPLAY`: wherther to display battery state
+        /// * `SFS_QUICK_RELOCATION`: quick relocation
+        /// * `SFS_MIXED_INTERACTION_MODE`: toggle for mixed tracking mode
+        /// * `SFS_REMINDER_FOR_ABNORMAL_LOCATING`: reminder for abnormal locating
+        /// * `SFS_GESTURE_RECOGNITION_HOME_ENABLE_ON_DESKTOP`: HOME gesture toggle: in system desktop
+        /// * `SFS_GESTURE_RECOGNITION_RESET_ENABLE_ON_DESKTOP`: RESET gesture toggle: in system desktop
+        /// * `SFS_DISABLE_WINDOW_MEMORY_OPTIMIZATION`: disable window memory optimization strategy
+        /// * `SFS_GLOBAL_VST`: global VST
+        /// * `SFS_HAND_TRACKING_HOOK`: toggle for hand tracking injection
+        /// * `SFS_USB_TETHERING_STATIC_IP_ENABLED`: toggle for USB tethering with static IP
+        /// * `SFS_TRACKER_MODE`: tracking mode (`0`- body tracking; `1` - object tracking)
+        /// * `SFS_GUARDIAN_PERSISTENT_IMMERSION_MODE`: Guardian persistent immersive mode: do not auto-enter VST when leaving the play area (`0` — system default, no special handling; `1` — do not trigger VST)
         /// </param>
         /// <param name="callback">The callback that returns the switch's status:
         /// * `0`: off
@@ -1779,24 +1760,38 @@ namespace Unity.XR.PICO.TOBSupport
 
         /// <summary>
         /// Displays or hides the specified tab or option on the Settings pane.
-        /// @note Supported by PICO Neo3 Pro and PICO 4 Enterprise with system version 5.5.0 or later.
+        /// @note Supported by PICO Neo3 Pro and PICO 4 Enterprise with system version 5.5.0 or later, PICO G3 with system version 5.6.0 or later, and PICO 4 Ultra with system version 5.13.0 or later. Some enum values have other requirements for use.
         /// </summary>
         /// <param name="customizeSettingsTabEnum">Specifies the tab or option to display or hide. Enumerations:
-        /// * `CUSTOMIZE_SETTINGS_TAB_WLAN`: the "WLAN" tab
-        /// * `CUSTOMIZE_SETTINGS_TAB_CONTROLLER`: the "Controller" tab
-        /// * `CUSTOMIZE_SETTINGS_TAB_BLUETOOTH`: the "Bluetooth" tab
-        /// * `CUSTOMIZE_SETTINGS_TAB_DISPLAY`: the "Display" tab
-        /// * `CUSTOMIZE_SETTINGS_TAB_LAB`: the "LAB" tab
-        /// * `CUSTOMIZE_SETTINGS_TAB_GENERAL_FACTORY_RESET`: the "Factory Reset" option on the "General" tab
-        /// * `CUSTOMIZE_SETTINGS_TAB_GENERAL_LOCKSCREEN`: the "Lock Screen" option on the "General" tab
+        /// - `CUSTOMIZE_SETTINGS_TAB_WLAN`: the "WLAN" tab
+        /// - `CUSTOMIZE_SETTINGS_TAB_CONTROLLER`: the "Controller" tab
+        /// - `CUSTOMIZE_SETTINGS_TAB_BLUETOOTH`: the "Bluetooth" tab
+        /// - `CUSTOMIZE_SETTINGS_TAB_DISPLAY`: the "Display" tab
+        /// - `CUSTOMIZE_SETTINGS_TAB_LAB`: the "LAB" tab
+        /// - `CUSTOMIZE_SETTINGS_TAB_GENERAL_FACTORY_RESET`: the "Factory Reset" option on the "General" tab
+        /// - `CUSTOMIZE_SETTINGS_TAB_GENERAL_LOCKSCREEN`: the "Lock Screen" option on the "General" tab
+        /// - `CUSTOMIZE_SETTINGS_TAB_ACCOUNTS`: the Account tab (only supported by PICO 4 Ultra with system version 5.13.0 or later)
+        /// - `CUSTOMIZE_SETTINGS_TAB_SYSTEM_UPDATE`: the System Update tab (only supported by PICO 4 Ultra with system version 5.13.0 or later)
+        /// - `CUSTOMIZE_SETTINGS_TAB_INTERACTION`: the Interaction tab (only supported by PICO 4 Ultra with system version 5.13.0 or later)
+        /// - `CUSTOMIZE_SETTINGS_TAB_PUPIL_DISTANCE`: the Pupil Distance tab (only supported by PICO 4 Ultra with system version 5.13.0 or later)
+        /// - `CUSTOMIZE_SETTINGS_TAB_CAMERA_SEETHROUGH`: the Camera Seethrough tab (only supported by PICO 4 Ultra with system version 5.13.0 or later)
+        /// - `CUSTOMIZE_SETTINGS_TAB_VIRTUAL_ENVIRONMENT`: the Virtual Environment tab (only supported by PICO 4 Ultra with system version 5.13.0 or later)
+        /// - `CUSTOMIZE_SETTINGS_TAB_SAFEGUARD`:the Safeguard tab (only supported by PICO 4 Ultra with system version 5.13.0 or later)
+        /// - `CUSTOMIZE_SETTINGS_TAB_ROOM_CAPTURE`: the Room Capture tab (only supported by PICO 4 Ultra with system version 5.13.0 or later)
+        /// - `CUSTOMIZE_SETTINGS_TAB_PERFORMANCE`: the Performance tab (only supported by PICO 4 Ultra with system version 5.13.0 or later)
+        /// - `CUSTOMIZE_SETTINGS_TAB_CONTROL_CENTRE`: the Control Center tab (only supported by PICO 4 Ultra with system version 5.13.0 or later)
+        /// - `CUSTOMIZE_SETTINGS_TAB_NOTIFICATIONS`: the Notification tab (only supported by PICO 4 Ultra with system version 5.13.0 or later)
+        /// - `CUSTOMIZE_SETTINGS_TAB_APP_MANAGEMENT`: the App Managament tab (only supported by PICO 4 Ultra with system version 5.13.0 or later)
+        /// - `CUSTOMIZE_SETTINGS_TAB_ABOUT`: the About tab (only supported by PICO 4 Ultra with system version 5.13.0 or later)
+        /// - `CUSTOMIZE_SETTINGS_TAB_HELP_FEEDBACK`: the Help and Feedback tab (only supported by PICO 4 Ultra with system version 5.13.0 or later)
         /// </param>
         /// <param name="switchEnum">Sets to display or hide the specified tab or option:
-        /// * `S_ON`: display
-        /// * `S_OFF`: hide
+        /// - `S_ON`: display
+        /// - `S_OFF`: hide
         /// </param>
         /// <returns>
-        /// * `0`: success
-        /// * `1`: failure
+        /// - `0`: success
+        /// - `1`: failure
         /// </returns>
         public static int UPxr_CustomizeSettingsTabStatus(CustomizeSettingsTabEnum customizeSettingsTabEnum, SwitchEnum switchEnum, int ext=0)
         {
@@ -1948,6 +1943,7 @@ namespace Unity.XR.PICO.TOBSupport
 
         /// <summary>
         /// Opens the RGB camera.
+        /// @note Only supported by PICO 4 Enterprise.
         /// </summary>
         /// <returns>Whether the RGB camera has been opened:
         /// * `true`: success
@@ -1960,6 +1956,7 @@ namespace Unity.XR.PICO.TOBSupport
 
         /// <summary>
         /// Closes the RGB camera.
+        /// @note Only supported by PICO 4 Enterprise.
         /// </summary>
         /// <returns>Whether the RGB camera has been closed:
         /// * `true`: success
@@ -1972,6 +1969,7 @@ namespace Unity.XR.PICO.TOBSupport
 
         /// <summary>
         /// Gets camera parameters (including intrinsics & extrinsics).
+        /// @note Only supported by PICO 4 Enterprise.
         /// </summary>
         /// <returns> RGBCameraParams including intrinsics and extrinsics.
         /// </returns>
@@ -1982,6 +1980,7 @@ namespace Unity.XR.PICO.TOBSupport
 
         /// <summary>
         /// Gets the current head tracking confidence.
+        /// @note Only supported by PICO 4 Enterprise.
         /// </summary>
         /// <returns>
         /// * `0`: bad
@@ -1994,6 +1993,7 @@ namespace Unity.XR.PICO.TOBSupport
 
         /// <summary>
         /// Acquires RGB camera frame (the original image before anti-distortion).
+        /// @note Only supported by PICO 4 Enterprise.
         /// </summary>
         /// <param name="frame">Frame info.</param>
         /// <returns>
@@ -2006,6 +2006,7 @@ namespace Unity.XR.PICO.TOBSupport
 
         /// <summary>
         /// Acquires RGB camera frame (the image after anti-distortion).
+        /// @note Only supported by PICO 4 Enterprise.
         /// </summary>
         /// <param name="width">Desired frame width, should not exceed 2328.</param>
         /// <param name="height">Desired frame height, should not exceed 1748.</param>
@@ -2034,30 +2035,6 @@ namespace Unity.XR.PICO.TOBSupport
         public static SensorState GetPredictedMainSensorState(double predictTime,bool isGlobal=true)
         {
             return PXR_EnterprisePlugin.UPxr_GetPredictedMainSensorState(predictTime,isGlobal);
-        }
-
-        public static PoseInfo GetHeadPose()
-        {
-            return PXR_EnterprisePlugin.GetHeadPose();
-        }
-
-        public static PoseInfo[] GetControllerPose()
-        {
-            return GetControllerPose(0);
-        }
-
-        public static PoseInfo[] GetControllerPose(double predictTime)
-        {
-            return PXR_EnterprisePlugin.GetControllerPose(predictTime);
-        }
-
-        /// <summary>
-        /// Returns the TobService controller IMU payload. Element 0 is left and element 1 is right.
-        /// predictTime is expressed in nanoseconds by the Enterprise API.
-        /// </summary>
-        public static ControllerImuData[] GetControllerImuData(long predictTime = 0L)
-        {
-            return PXR_EnterprisePlugin.GetControllerImuData(predictTime);
         }
 
         /// <summary>
@@ -2720,12 +2697,12 @@ namespace Unity.XR.PICO.TOBSupport
         /// <returns>
         /// Returns the `displayID` for success, and `-101` for failure.
         /// </returns>
-        public static int CreateVirtualDisplay(string displayName, IntPtr surfaceObj, int densityDpi, int flags)
+        public static int CreateVirtualDisplay(string displayName, IntPtr surfaceObj, int densityDpi, int flags,int width=1024, int height=1024)
         {
-            return PXR_EnterprisePlugin.UPxr_CreateVirtualDisplay(displayName, surfaceObj, 1024, 1024, densityDpi,
+            return PXR_EnterprisePlugin.UPxr_CreateVirtualDisplay(displayName, surfaceObj, width, height, densityDpi,
                 flags);
         }
-
+        
         /// <summary>Starts an app on the virtual display.</summary>
         /// <param name="displayId">Specifies the ID of the virtual display.</param>
         /// <param name="intent">Specifies the intent of `startActivity`. The intent type is provied by PICO SDK.</param>        
@@ -2790,7 +2767,14 @@ namespace Unity.XR.PICO.TOBSupport
         /// </returns>  
         public static int InjectEvent(int displayId, int action, int source, float x, float y)
         {
-            return PXR_EnterprisePlugin.UPxr_InjectEvent(displayId, action, source, 1024*x, 1024*y);
+            if (x<1&&y<1)
+            {
+                return PXR_EnterprisePlugin.UPxr_InjectEvent(displayId, action, source, 1024*x, 1024*y);
+            }
+            else
+            {
+                return PXR_EnterprisePlugin.UPxr_InjectEvent(displayId, action, source, x, y);
+            }
         }
 
         /// <summary>Injects the input event.</summary>
@@ -3782,13 +3766,21 @@ namespace Unity.XR.PICO.TOBSupport
         /// - `true`: opened
         /// - `false`: not opened
         /// </param>
-        public static void OpenCameraAsyncfor4U(Action<bool> callback)
+        /// 打开camera接口。​
+
+        // KEY_MCTF: 控制是否开启RGB图像降噪功能，因为性能限制，建议只在<= 30fps场景开启
+        // 取值: VALUE_TRUE or VALUE_FALSE，默认VALUE_FALSE。
+        // KEY_EIS: 控制是否开启电子防抖能力
+        // 取值: VALUE_TRUE or VALUE_FALSE，默认VALUE_FALSE。
+        // KEY_MFNR: 控制是否开启多帧合成拍照。最新版本上如果需要拍照功能一定要开启此flag
+        // 取值: VALUE_TRUE or VALUE_FALSE，默认VALUE_FALSE。
+        public static void OpenCameraAsyncfor4U(Action<bool> callback,Dictionary<string, string> setting=null)
         {
             RequestUserPermission(Granted =>
             {
                 Debug.Log($"PermissionCallbacks_PermissionGranted Granted: {Granted}");
                 PXR_EnterprisePlugin.setCapturelibCallBack(EventDataCapturelibCallBackFunction);
-                bool ret = PXR_EnterprisePlugin.OpenCameraAsync();
+                bool ret = PXR_EnterprisePlugin.OpenCameraAsync(setting);
                 if (!ret)
                 {
                     callback(false);
@@ -3822,9 +3814,9 @@ namespace Unity.XR.PICO.TOBSupport
         /// Uses the default camera settings. The default frame rate is 60fps.
         /// @note Only supported by PICO 4 Ultra Enterprise.
         /// </summary>
-        public static void Configurefor4U()
+        public static void Configurefor4U(Dictionary<string, string> setting=null)
         {
-            PXR_EnterprisePlugin.Configure();
+            PXR_EnterprisePlugin.Configure(setting);
         }
 
         /// <summary>
@@ -3848,8 +3840,8 @@ namespace Unity.XR.PICO.TOBSupport
         }
         private static Action<Frame> onImageAvailable;
         private static Action<bool> openCameraAsyncSuccess;
-        private static CameraFrame cameraFrame;
-
+        static Frame pxrFrame;
+  		private static bool isGlobalPose = false;
         /// <summary>
         /// Sets a frame buffer for the camera. The frame buffer is used to store image data with specified width and height.
         /// @note Only supported by PICO 4 Ultra Enterprise.
@@ -3860,10 +3852,10 @@ namespace Unity.XR.PICO.TOBSupport
         public static void SetCameraFrameBufferfor4U(int width, int height, ref IntPtr data, Action<Frame> imageAvailable)
         {
             onImageAvailable = imageAvailable;
-            cameraFrame.width=(uint)width;
-            cameraFrame.height=(uint)height;
-            cameraFrame.data=data;
-            PXR_EnterprisePlugin.setCameraFrameBuffer(ref cameraFrame);
+            pxrFrame.width=(uint)width;
+            pxrFrame.height=(uint)height;
+            pxrFrame.data=data;
+            PXR_EnterprisePlugin.setCameraFrameBuffer(ref pxrFrame);
         }
         [MonoPInvokeCallback(typeof(PXR_EnterprisePlugin.CapturelibCallBack))]
         static void EventDataCapturelibCallBackFunction(int type)
@@ -3871,19 +3863,17 @@ namespace Unity.XR.PICO.TOBSupport
             switch (type)
             {
                 case 0:
+                
                     if (onImageAvailable!=null)
                     {
-                        SensorState a = GetPredictedMainSensorState(cameraFrame.time/ 1000000,false);
-                        Frame pxrFrame;
-                        pxrFrame.width = cameraFrame.width;
-                        pxrFrame.height = cameraFrame.height;
-                        pxrFrame.data = cameraFrame.data;
-    
+                     
+                        SensorState a = GetPredictedMainSensorState(pxrFrame.timestamp / 1000000.0f,isGlobalPose);
+                       
                         pxrFrame.pose = a.pose;
-                        pxrFrame.timestamp = cameraFrame.time;
                         pxrFrame.status=a.status;
-                        pxrFrame.datasize=cameraFrame.size;
+                      
                         onImageAvailable(pxrFrame);
+                        
                     }
                     break;
                 case 1:
@@ -3963,9 +3953,20 @@ namespace Unity.XR.PICO.TOBSupport
         /// </returns>
         public static bool GetCameraExtrinsicsfor4U(out Matrix4x4 left, out Matrix4x4 right)
         {
+            left=Matrix4x4.identity;
+            right=Matrix4x4.identity;
             bool ret=PXR_EnterprisePlugin.GetCameraExtrinsics(out var leftExtrinsics,out var rightExtrinsics);
-            left= PXR_EnterprisePlugin.DoubleArrayToMatrix4x4(leftExtrinsics);
-            right=  PXR_EnterprisePlugin.DoubleArrayToMatrix4x4(rightExtrinsics);
+            if (ret)
+            {
+                if (rightExtrinsics!=null)
+                {
+                    right=  PXR_EnterprisePlugin.DoubleArrayToMatrix4x4(rightExtrinsics);
+                }
+                if (leftExtrinsics!=null)
+                {
+                    left=  PXR_EnterprisePlugin.DoubleArrayToMatrix4x4(leftExtrinsics);
+                }
+            }
             return ret;
         }
 
@@ -3998,6 +3999,356 @@ namespace Unity.XR.PICO.TOBSupport
             }
             return rgbCameraParams;
         }
+        
+        /// <summary>
+        /// Sets an app as the device owner app.
+        /// @note Only supported by PICO 4 Ultra with device system version 5.13.0 or later.
+        /// </summary>
+        /// <param name="pkg">Specifies the package name of the owner app.</param>
+        /// <param name="cls">Specifies the class name of the admin component.</param>
+        /// <returns>
+        /// - `0`: success
+        /// - `1`: failure
+        /// - `2`: permission verification failed
+        /// </returns>
+        public static int SetDeviceOwner(String pkg, String cls)
+        {
+            return PXR_EnterprisePlugin.UPxr_SetDeviceOwner(pkg, cls);
+        }
 
+        /// <summary>
+        /// Gets the device owner app.
+        /// @note Only supported by PICO 4 Ultra with device system version 5.13.0 or later.
+        /// </summary>
+        /// <returns>
+        /// Android component name object containing the app package name and class name. Returns null if no device owner is set
+        /// </returns>
+        public static ComponentName GetDeviceOwner()
+        {
+            return PXR_EnterprisePlugin.UPxr_GetDeviceOwner();
+        }
+        
+        /// <summary>
+        /// Sets a home page for the browser.
+        /// @note Only supported by PICO 4 Ultra with device system version 5.13.0 or later.
+        /// </summary>
+        /// <param name="url">Specifies home page URL to set.</param>
+        /// <returns>
+        /// - `0`: success
+        /// - `1`: failure
+        /// - `-2`: not supported by the current device
+        /// </returns>
+        public static int SetBrowserHomePage(String url)
+        {
+            return PXR_EnterprisePlugin.UPxr_SetBrowserHomePage(url);
+        }
+
+        /// <summary>
+        /// Gets the home page of the browser.
+        /// @note Only supported by PICO 4 Ultra with device system version 5.13.0 or later.
+        /// </summary>
+        /// <returns>
+        /// The current home page URL of the browser. `null` indicates the default home page URL.
+        /// </returns>
+        public static string GetBrowserHomePage()
+        {
+            return PXR_EnterprisePlugin.UPxr_GetBrowserHomePage();
+        }
+
+        /// <summary>
+        /// Sets the capability for the PICO Motion Tracker to automatically power on when plugged in.
+        /// @note Only supported by PICO 4 Ultra with device system version 5.13.0 or later.
+        /// </summary>
+        /// <param name="enable">
+        /// - `true`: enable this capability
+        /// - `false`: disable this capability
+        /// </param>
+        /// <returns>
+        /// - `track1SN:track1Result,track2SN:track2Result,xxx` for success
+        /// - `1`: failure
+        /// - `-2`: not supported by the current device
+        /// </returns>
+        public static string SetMotionTrackerAutoStart(bool enable)
+        {
+            return PXR_EnterprisePlugin.UPxr_SetMotionTrackerAutoStart(enable?1:0);
+        }
+
+        /// <summary>
+        /// Enables the device to automatically join a WiFi.
+        /// @note Only supported by PICO 4 Ultra with device system version 5.13.0 or later.
+        /// </summary>
+        /// <param name="configuration">Specifies the WiFi configuration, whose priority is higher than `networkID`.</param>
+        /// <param name="networkID">Specifies the ID of the network to join. Only valid when `WifiConfiguration` is null.</param>
+        /// <param name="allowAutoJoin">Sets whether to allow auto-join:
+        /// - `true`: allow
+        /// - `false`: not allow
+        /// </param>
+        /// <returns>
+        /// - `0`: success
+        /// - `1`: failure
+        /// </returns>
+        public static int AllowWifiAutoJoin(WifiConfiguration configuration, int networkID, bool allowAutoJoin)
+        {
+            return PXR_EnterprisePlugin.UPxr_AllowWifiAutoJoin(configuration,networkID,allowAutoJoin);
+        }
+
+        /// <summary>
+        /// Gets the bound information of the large space.
+        /// @note Only supported by PICO 4 Ultra with device system version 5.13.0 or later.
+        /// </summary>
+        /// <returns>
+        /// The bound information of the large space.
+        /// </returns>
+        public static LargeSpaceBoundsInfo[] GetLargeSpaceBoundsInfoWithType()
+        {
+            return PXR_EnterprisePlugin.UPxr_GetLargeSpaceBoundsInfoWithType();
+        }
+        
+        /// <summary>Gets the status of HMD tracking.</summary>
+        /// <returns>
+        /// - `0`: heading tracking lost
+        /// - `1`: heading tracking is working normally
+        /// </returns>
+        public static int GetHeadTrackingStatus()
+        {
+            return PXR_EnterprisePlugin.UPxr_GetHeadTrackingStatus();
+        }
+        
+        /// <summary>Gets the pose of the HMD.
+        /// @note Only supported by devices with the capability of 6DoF tracking.
+        /// </summary>
+        /// <param name="predictTime">The predicted time in nanoseconds.</param>
+        /// <returns>The pose of the HMD at the predicted time.</returns>
+        public static Pose GetHeadPose(long predictTime)
+        {
+            return PXR_EnterprisePlugin.UPxr_GetHeadPose(predictTime);
+        }
+        
+        /// <summary>Gets the pose of the controller.
+        /// @note Only supported by devices with the capability of 6DoF tracking.
+        /// </summary>
+        /// <param name="predictTime">The predicted time in nanoseconds.</param>
+        /// <returns>The pose of the controller at the predicted time.</returns>
+        public static List<Pose> GetControllerPose(long predictTime)
+        {
+            return PXR_EnterprisePlugin.UPxr_GetControllerPose(predictTime);
+        }
+
+        /// <summary>Gets the pose of a motion tracker.
+        /// @note Supported by devices that motion trackers can connect to.
+        /// </summary>
+        /// <param name="swiftSN">The serial number of the motion tracker to get pose for.</param>
+        /// <param name="predictTime">The predicted time in nanoseconds.</param>
+        /// <returns>The pose of the motion tracker at the predicted time.</returns>
+        public static Pose GetSwiftPose(String swiftSN, long predictTime)
+        {
+            return PXR_EnterprisePlugin.UPxr_GetSwiftPose(swiftSN,predictTime);
+        }
+
+        /// <summary>Gets the information of motion trackers.
+        /// @note Supported by devices that motion trackers can connect to.
+        /// </summary>
+        /// <returns>A list of information about motion trackers.</returns>
+        public static List<SwiftDevice> GetSwiftTrackerDevices()
+        {
+            return PXR_EnterprisePlugin.UPxr_GetSwiftTrackerDevices();
+        }
+        
+        /// <summary>Gets the IMU data of the HMD.
+        /// @note Only supported by devices with the capability of 6DoF tracking.
+        /// </summary>
+        /// <param name="predictTime">The predicted time in nanoseconds.</param>
+        /// <returns>The HMD's IMU data at the predicted time.</returns>
+        public static IMUData GetHeadIMUData(long predictTime)
+        {
+            return PXR_EnterprisePlugin.UPxr_GetHeadIMUData(predictTime);
+        }
+
+        /// <summary>Gets the IMU data of the controller.
+        /// @note Only supported by devices with the capability of 6DoF tracking.
+        /// </summary>
+        /// <param name="predictTime">The predicted time in nanoseconds.</param>
+        /// <returns>The controller's IMU data at the predicted time.</returns>
+        public static List<IMUData> GetControllerIMUData(long predictTime)
+        {
+            return PXR_EnterprisePlugin.UPxr_GetControllerIMUData(predictTime);
+        }
+
+        /// <summary>Gets the IMU data of a motion tracker.
+        /// @note Supported by devices that motion trackers can connect to.
+        /// </summary>
+        /// <param name="swiftSN">The serial number of the motion tracker to get IMU data for.</param>
+        /// <param name="predictTime">The predicted time in nanoseconds.</param>
+        /// <returns>The motion tracker's IMU data at the predicted time.</returns>
+        public static IMUData GetSwiftIMUData(String swiftSN, long predictTime)
+        {
+            return PXR_EnterprisePlugin.UPxr_GetSwiftIMUData(swiftSN,predictTime);
+        }
+        
+        /// <summary>Starts pairing motion tracker(s).
+        /// @note Supported by devices that motion trackers can connect to.
+        /// </summary>
+        /// <param name="trackerId">The ID of the motion tracker to pair. `0` indicates pairing all motion trackers.</param>
+        /// <returns>`0` for success, and other values for failure.</returns>
+        public static int StartSwiftTrackerPairing(int trackerId)
+        {
+            return PXR_EnterprisePlugin.UPxr_StartSwiftTrackerPairing(trackerId);
+        }
+
+        /// <summary>Unbonds motion tracker(s).
+        /// @note Supported by devices that motion trackers can connect to.
+        /// </summary>
+        /// <param name="trackerId">The ID of the motion tracker to unbond. `0` indicates unbonding all motion trackers.</param>
+        /// <returns>`0` for success, and other values for failure.</returns>
+        public static int UnBondSwiftTracker(int trackerId)
+        {
+            return PXR_EnterprisePlugin.UPxr_UnBondSwiftTracker(trackerId);
+        }
+
+        /// <summary>Resets tracking.
+        /// @note Only supported by devices with the capability of 6DoF tracking.
+        /// </summary>
+        /// <returns>`
+        /// - `0`: success
+        /// - `1`: failure
+        /// </returns>
+        public static int ResetTracking()
+        {
+            return PXR_EnterprisePlugin.UPxr_ResetTracking();
+        }
+        
+        /// <summary>Sets the color of the fence.
+        /// @note Only supported by PICO 4 Ultra Enterprise.
+        /// </summary>
+        /// <param name="fenceType">The fence type:
+        /// - `1`: safety fence
+        /// - `2`: obstacle fence
+        /// </param>
+        /// <param name="red">The red value. The valid value range is [0, 255].</param>
+        /// <param name="green">The green value. The valid value range is [0, 255].</param>
+        /// <param name="blue">The blue value. The valid value range is [0, 255].</param>
+        /// <param name="alpha">The alpha value. The valid value range is [0, 255].</param>
+        /// <returns>
+        /// - `0`: success
+        /// - `1`: failure
+        /// </returns>
+        public static int SetFenceColor(int fenceType, int red, int green, int blue, int alpha)
+        {
+            return PXR_EnterprisePlugin.UPxr_SetFenceColor(fenceType, red, green, blue, alpha);
+        }
+
+        /// <summary>Gets the color of the fence.
+        /// @note Only supported by PICO 4 Ultra Enterprise.
+        /// </summary>
+        /// <param name="fenceType">The type of fence to get color for:
+        /// - `1`: safety fence
+        /// - `2`: obstacle fence
+        /// </param>
+        /// <returns>The color of the fence:
+        /// - `result[0]`: the red value
+        /// - `result[1]`: the green value
+        /// - `result[2]`: the blue value
+        /// - `result[3]`: the alpha value
+        /// </returns>
+        public static int[] GetFenceColor(int fenceType)
+        {
+            return PXR_EnterprisePlugin.UPxr_GetFenceColor(fenceType);
+        }
+
+        /// <summary>Sets the static IP for USB tethering.
+        /// @note Only supported by PICO 4 Ultra Enterprise.
+        /// </summary>
+        /// <param name="localAddr">The local IP address.</param>
+        /// <param name="clientAddr">The client IP address.</param>
+        /// <returns>
+        /// - `0`: success
+        /// - `1`: failure
+        /// - `101`: the local and client IP addresses are the same 
+        /// - `102`: the local and client ID addresses are not in the same subnet (subnet mask: 255.255.255.0)
+        /// </returns>
+        public static int SetUsbTetheringStaticIP(String localAddr, String clientAddr)
+        {
+            return PXR_EnterprisePlugin.UPxr_SetUsbTetheringStaticIP(localAddr, clientAddr);
+        }
+
+        /// <summary>Gets the local static IP for USB tethering.
+        /// @note Only supported by PICO 4 Ultra Enterprise.
+        /// </summary>
+        /// <returns>The local static ID for USB tethering.</returns>
+        public static string GetUsbTetheringStaticIPLocal()
+        {
+            return PXR_EnterprisePlugin.UPxr_GetUsbTetheringStaticIPLocal();
+        }
+
+        /// <summary>Gets the client static IP for USB tethering.
+        /// @note Only supported by PICO 4 Ultra Enterprise.
+        /// </summary>
+        /// <returns>The client static ID for USB tethering.</returns>
+        public static string GetUsbTetheringStaticIPClient()
+        {
+            return PXR_EnterprisePlugin.UPxr_GetUsbTetheringStaticIPClient();
+        }
+
+        /// <summary>Sets the scale of the large-space map.
+        /// @note Only supported by PICO 4 Ultra Enterprise.
+        /// </summary>
+        /// <param name="scale">The scale of the large-space map. The valid value range is (0.9–1.1).</param>
+        /// <param name="callback">The execution result callback:
+        /// - `0`: the scale was set successfully
+        /// - `1`: failed to set the scale
+        /// - `-3`: the specified scale is out of the valid value range
+        /// - `101`: Slam V1 algorithm does not support setting map scale
+        /// - `102`: large-space quick mode not supported
+        /// - `103`: the large space mode is off
+        /// - `104`: map export in progress
+        /// - `105`: map export succeeded
+        /// - `106`: map export failed
+        /// - `107`: failed to restart tracking
+        /// </param>
+        /// <returns>
+        /// - `0`: success
+        /// - `-4`: failure, not supported by the current enterprise setting, need to update the setting
+        public static int SetLargeSpaceMapScale(float scale, Action<int> callback)
+        {
+            return PXR_EnterprisePlugin.UPxr_SetLargeSpaceMapScale(scale,callback);
+        }
+        
+        /// <summary>
+        /// Gets the predicted pose and status of the main sensor when the VST image is being displayed.
+        /// </summary>
+        /// <param name="predictTime">The predicted time in nanoseconds.</param>
+        /// <returns>The status of the sensor at the predicted time.</returns>
+        public static PxrSensorState2 GetPredictedMainSensorState2(double predictTime)
+        {
+            return PXR_EnterprisePlugin.UPxr_GetPredictedMainSensorState2(predictTime);
+        }
+
+        /// <summary>Uses the global pose for HMD and controller tracking.</summary>
+        /// <param name="flg">Whether to use the global pos:
+        /// - `true`: use
+        /// - `false`: do not use
+        /// </param>
+        public static void UseGlobalPose(bool flg)
+        {
+			isGlobalPose=flg;
+            PXR_Plugin.Boundary.UPxr_SetSeeThroughState(flg);
+            if (flg)
+            {
+                PXR_EnterprisePlugin.Create_Client();
+            }
+        }
+
+        /// <summary>Converts the coordinate of a pose.</summary>
+        /// <param name="type">The conversion type:
+        /// - `kLocal2Global = 0`: convert the coordinate from local coordinate to global coordinate
+        /// - `kGlobal2Local = 1`: convert the coordinate from global coordinate to local coordinate
+        /// </param>
+        /// <param name="srcPose">The source pose.</param>
+        /// <param name="destPose">The converted pose.</param>
+        /// <returns>`0` for success, and other values for failure.</returns>
+        public static int ConvertPoseCoordinate(PXR_EnterprisePlugin.ConvertCoordinateType type,UnityEngine.Pose srcPose,ref UnityEngine.Pose destPose)
+        {
+           return PXR_EnterprisePlugin.ConvertCoordinate(type,srcPose,ref destPose);
+        }
     }
 }

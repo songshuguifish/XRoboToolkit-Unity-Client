@@ -25,11 +25,21 @@ namespace Robot
         // sensor callback. Poll above the controller tracking rate without starving the
         // production 800 Hz raw pose path; source timestamp deduplication preserves truth.
         private const int TobControllerImuSampleHz = 250;
+        // PICO SDK 3.4 Enterprise pose/IMU calls allocate JSON-backed managed objects. Poll
+        // them near the physical tracking rate instead of the 800 Hz legacy transport rate.
+        private const int OfficialHeadTelemetrySampleHz = 120;
+        private const long OfficialHeadTelemetryPredictTimeNs = 0L;
         // v2 guarantees that every serialized derivative uses the SI unit named by its field.
         private const int NativeKinematicsSchemaVersion = 2;
+        // Shadow local/global poses expose the two coordinate spaces returned by the same
+        // native PICO query without changing the established primary pose.
+        private const int NativePosePairSchemaVersion = 1;
         // TobService does not document units for IMUData scalar fields. Schema v1 therefore
         // preserves the exact vendor values under explicit *_native field names.
         private const int TobControllerImuSchemaVersion = 1;
+        // v2 records the configured prediction horizon explicitly; production uses 0 ns.
+        private const int OfficialHeadPoseSchemaVersion = 2;
+        private const int OfficialHeadImuSchemaVersion = 1;
         public const string InvalidControllerPose = "0,0,0,0,0,0,1";
         private static bool s_enterpriseServiceBound;
         private static readonly object s_latestEnterpriseHeadLock = new object();
@@ -43,6 +53,8 @@ namespace Robot
         private static long s_latestEnterpriseControllerSampleSeq;
         private static readonly object s_latestTobControllerImuLock = new object();
         private static ControllerImuData[] s_latestTobControllerImu;
+        private static readonly object s_latestOfficialHeadTelemetryLock = new object();
+        private static OfficialHeadTelemetry s_latestOfficialHeadTelemetry;
 
         [SerializeField] private bool autoStart = true;
         // MCAP over TCP is the production recording path. The local JSONL stream is only a
@@ -51,6 +63,10 @@ namespace Robot
         [SerializeField] private bool enableFileWrite = false;
         [SerializeField] private bool collectHeadPose = true;
         [SerializeField] private bool collectControllerPose = true;
+        [SerializeField] private bool collectOfficialHeadTelemetry = true;
+        // Shadow mode is the rollout default: publish the new SDK pose/IMU alongside the
+        // legacy pose without changing the pose used by teleoperation.
+        [SerializeField] private bool preferOfficialHeadPose = false;
         // Applied again during Awake so a stale serialized or manually adjusted value cannot
         // carry into the next production app launch.
         [SerializeField] private int enterpriseSampleHz = ProductionEnterpriseSampleHz;
@@ -68,6 +84,7 @@ namespace Robot
 
         private Thread _enterpriseThread;
         private Thread _controllerImuThread;
+        private Thread _officialHeadTelemetryThread;
         private EnterpriseCollectionFileWriter _fileWriter;
         private volatile bool _recording;
         private long _enterpriseHeadSeq;
@@ -75,7 +92,6 @@ namespace Robot
         private long _unityHeadSeq;
         private long _unityControllerSeq;
         private double _nextUnitySampleTimeSeconds;
-        private long _lastEnterpriseHeadSampleTicks;
         private long _enterpriseHeadSamplesInWindow;
         private long _enterpriseControllerSamplesInWindow;
         private long _lastEnterpriseRateLogTicks;
@@ -120,11 +136,15 @@ namespace Robot
         public static void NotifyEnterpriseServiceBound(bool bind)
         {
             s_enterpriseServiceBound = bind;
+            ArucoMarkerTelemetry.NotifyEnterpriseServiceBound(bind);
             if (!bind)
             {
                 ClearLatestEnterpriseHead();
                 ClearLatestEnterpriseController();
                 ClearLatestTobControllerImu();
+                ClearLatestOfficialHeadTelemetry();
+                TrackingOriginTelemetry.Reset();
+                LargeSpaceTelemetry.Reset();
             }
 
             EnterpriseCollectionRecorder recorder = FindObjectOfType<EnterpriseCollectionRecorder>();
@@ -141,10 +161,14 @@ namespace Robot
 
         private void Update()
         {
+            TrackingOriginTelemetry.SampleOnMainThread(s_enterpriseServiceBound);
+            ArucoMarkerTelemetry.UpdateOnMainThread();
             if (!_recording)
             {
                 return;
             }
+
+            LargeSpaceTelemetry.SampleOnMainThread(s_enterpriseServiceBound);
 
             if (!_recordTimeLimitReached && maxRecordSeconds > 0 && _stopwatch.Elapsed.TotalSeconds >= maxRecordSeconds)
             {
@@ -195,7 +219,7 @@ namespace Robot
                 UseDynamicPredictedDisplayTimeForEnterpriseHead = useDynamicPredictedDisplayTimeForEnterpriseHead,
                 EnterpriseHeadPredictTimeMode = useDynamicPredictedDisplayTimeForEnterpriseHead
                     ? "dynamic"
-                    : "sample_interval",
+                    : "latest",
                 EnterpriseControllerPredictTimeMode = "latest"
             });
 
@@ -204,10 +228,13 @@ namespace Robot
             _nextUnitySampleTimeSeconds = 0;
             _enterpriseHeadSamplesInWindow = 0;
             _enterpriseControllerSamplesInWindow = 0;
-            _lastEnterpriseHeadSampleTicks = 0;
             _lastEnterpriseRateLogTicks = Stopwatch.GetTimestamp();
             _recordTimeLimitReached = false;
             ClearLatestTobControllerImu();
+            ClearLatestOfficialHeadTelemetry();
+            TrackingOriginTelemetry.SampleOnMainThread(s_enterpriseServiceBound, true);
+            ArucoMarkerTelemetry.UpdateOnMainThread();
+            LargeSpaceTelemetry.SampleOnMainThread(s_enterpriseServiceBound, true);
 
             _enterpriseThread = new Thread(EnterpriseLoop)
             {
@@ -222,6 +249,13 @@ namespace Robot
                 Name = "TobControllerImu"
             };
             _controllerImuThread.Start();
+
+            _officialHeadTelemetryThread = new Thread(OfficialHeadTelemetryLoop)
+            {
+                IsBackground = true,
+                Name = "PicoSdk34HeadTelemetry"
+            };
+            _officialHeadTelemetryThread.Start();
 
             Debug.Log($"{Tag} started: {_fileWriter.RecordDir}, enableFileWrite={enableFileWrite}, " +
                 $"collectHeadPose={collectHeadPose}, collectControllerPose={collectControllerPose}");
@@ -239,7 +273,7 @@ namespace Robot
 
         private static bool CanStartRecording()
         {
-#if PICO_PLATFORM
+#if UNITY_ANDROID && !UNITY_EDITOR
             return s_enterpriseServiceBound;
 #else
             return true;
@@ -263,6 +297,9 @@ namespace Robot
             stageProfile.Restart();
             _controllerImuThread?.Join(1000);
             long controllerImuJoinMs = stageProfile.ElapsedMilliseconds;
+            stageProfile.Restart();
+            _officialHeadTelemetryThread?.Join(1000);
+            long officialHeadJoinMs = stageProfile.ElapsedMilliseconds;
 
             EnterpriseCollectionFileWriter.StopStats writerStats = _fileWriter != null
                 ? _fileWriter.Stop(2000)
@@ -274,11 +311,13 @@ namespace Robot
             ClearLatestEnterpriseHead();
             ClearLatestEnterpriseController();
             ClearLatestTobControllerImu();
+            ClearLatestOfficialHeadTelemetry();
             stopProfile.Stop();
             Debug.Log($"{Tag} stopped: {recordDir}");
             Debug.Log($"{Tag} stop profile: totalMs={stopProfile.ElapsedMilliseconds}, " +
                 $"enterpriseJoinMs={enterpriseJoinMs}, writerJoinMs={writerStats.WriterJoinMs}, " +
                 $"controllerImuJoinMs={controllerImuJoinMs}, " +
+                $"officialHeadJoinMs={officialHeadJoinMs}, " +
                 $"closeWritersMs={writerStats.CloseWritersMs}, " +
                 $"pendingBeforeStop={pendingBeforeStop}, pendingAfterStop={writerStats.PendingAfterStop}, " +
                 $"enterpriseThreadAlive={(_enterpriseThread != null && _enterpriseThread.IsAlive)}, " +
@@ -305,7 +344,7 @@ namespace Robot
 
         private void EnterpriseLoop()
         {
-#if PICO_PLATFORM
+#if UNITY_ANDROID && !UNITY_EDITOR
             AndroidJNI.AttachCurrentThread();
 #endif
             try
@@ -359,7 +398,7 @@ namespace Robot
             }
             finally
             {
-#if PICO_PLATFORM
+#if UNITY_ANDROID && !UNITY_EDITOR
                 AndroidJNI.DetachCurrentThread();
 #endif
             }
@@ -367,7 +406,7 @@ namespace Robot
 
         private void ControllerImuLoop()
         {
-#if PICO_PLATFORM
+#if UNITY_ANDROID && !UNITY_EDITOR
             AndroidJNI.AttachCurrentThread();
 #endif
             try
@@ -383,7 +422,8 @@ namespace Robot
                         continue;
                     }
 
-                    ControllerImuData[] controllerImu = PXR_Enterprise.GetControllerImuData(0L);
+                    ControllerImuData[] controllerImu =
+                        PicoEnterpriseTelemetryProvider.GetControllerImuData(0L);
                     if (controllerImu != null)
                     {
                         lock (s_latestTobControllerImuLock)
@@ -416,9 +456,133 @@ namespace Robot
             }
             finally
             {
-#if PICO_PLATFORM
+#if UNITY_ANDROID && !UNITY_EDITOR
                 // This is our own long-lived worker. Detaching at shutdown prevents a service
                 // rebind/restart from retaining the thread's JNI state and local-reference table.
+                AndroidJNI.DetachCurrentThread();
+#endif
+            }
+        }
+
+        private void OfficialHeadTelemetryLoop()
+        {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            AndroidJNI.AttachCurrentThread();
+#endif
+            int consecutiveFailures = 0;
+            long successfulSamples = 0;
+            long attemptedSamples = 0;
+            try
+            {
+                long nextSampleTicks = Stopwatch.GetTimestamp();
+                while (_recording)
+                {
+                    if (!collectHeadPose || !collectOfficialHeadTelemetry)
+                    {
+                        Thread.Sleep(100);
+                        nextSampleTicks = Stopwatch.GetTimestamp();
+                        continue;
+                    }
+
+                    try
+                    {
+                        attemptedSamples++;
+                        if (attemptedSamples == 1)
+                        {
+                            Debug.Log(
+                                $"{Tag} PICO SDK {PXR_Constants.SDKVersion} Head telemetry " +
+                                "first call started on attached JNI thread " +
+                                $"predictTimeNs={OfficialHeadTelemetryPredictTimeNs}");
+                        }
+                        PicoEnterpriseTelemetryProvider.GetOfficialHeadTelemetry(
+                            OfficialHeadTelemetryPredictTimeNs,
+                            out Unity.XR.PICO.TOBSupport.Pose pose,
+                            out IMUData imu,
+                            out string telemetryTransport);
+                        OfficialHeadTelemetry telemetry = CreateOfficialHeadTelemetry(pose, imu);
+                        if (telemetry.PoseAvailable || telemetry.ImuAvailable)
+                        {
+                            lock (s_latestOfficialHeadTelemetryLock)
+                            {
+                                MergeOfficialHeadTelemetry(
+                                    ref s_latestOfficialHeadTelemetry,
+                                    telemetry);
+                            }
+                            successfulSamples++;
+                            if (successfulSamples == 1 ||
+                                successfulSamples % (OfficialHeadTelemetrySampleHz * 10) == 0)
+                            {
+                                Debug.Log(
+                                    $"{Tag} PICO SDK {PXR_Constants.SDKVersion} Head telemetry ok " +
+                                    $"samples={successfulSamples}, " +
+                                    $"poseAvailable={telemetry.PoseAvailable}, " +
+                                    $"poseTimestampNs={telemetry.PoseTimestampNs}, " +
+                                    $"predictTimeNs={OfficialHeadTelemetryPredictTimeNs}, " +
+                                    $"poseConfidence={telemetry.PoseConfidence}, " +
+                                    $"poseError={telemetry.PoseError}, " +
+                                    $"imuAvailable={telemetry.ImuAvailable}, " +
+                                    $"imuTimestampNs={telemetry.ImuTimestampNs}, " +
+                                    $"transport={telemetryTransport}, " +
+                                    $"imuAccelerationNative=" +
+                                    $"({telemetry.LinearAccelerationNative.X:F6}," +
+                                    $"{telemetry.LinearAccelerationNative.Y:F6}," +
+                                    $"{telemetry.LinearAccelerationNative.Z:F6})");
+                            }
+                            consecutiveFailures = 0;
+                        }
+                        else
+                        {
+                            consecutiveFailures++;
+                            if (consecutiveFailures == 1 ||
+                                consecutiveFailures % (OfficialHeadTelemetrySampleHz * 10) == 0)
+                            {
+                                Debug.LogWarning(
+                                    $"{Tag} PICO SDK {PXR_Constants.SDKVersion} Head telemetry " +
+                                    $"returned empty count={consecutiveFailures}, " +
+                                    $"attempts={attemptedSamples}");
+                            }
+                        }
+                    }
+                    catch (Exception exception)
+                    {
+                        consecutiveFailures++;
+                        if (consecutiveFailures == 1 || consecutiveFailures % 600 == 0)
+                        {
+                            Debug.LogWarning(
+                                $"{Tag} PICO SDK 3.4 Head telemetry failed " +
+                                $"count={consecutiveFailures}: {exception.GetType().Name}: " +
+                                exception.Message);
+                        }
+                    }
+
+                    long intervalTicks = Math.Max(
+                        1,
+                        (long)Math.Round(
+                            Stopwatch.Frequency / (double)OfficialHeadTelemetrySampleHz));
+                    nextSampleTicks += intervalTicks;
+                    long remainingTicks = nextSampleTicks - Stopwatch.GetTimestamp();
+                    if (remainingTicks > 0)
+                    {
+                        int sleepMs = (int)(remainingTicks * 1000 / Stopwatch.Frequency);
+                        if (sleepMs > 0)
+                        {
+                            Thread.Sleep(sleepMs);
+                        }
+                        else
+                        {
+                            Thread.Yield();
+                        }
+                    }
+                    else
+                    {
+                        nextSampleTicks = Stopwatch.GetTimestamp();
+                        Thread.Yield();
+                    }
+                }
+            }
+            finally
+            {
+#if UNITY_ANDROID && !UNITY_EDITOR
                 AndroidJNI.DetachCurrentThread();
 #endif
             }
@@ -487,7 +651,7 @@ namespace Robot
                 double predictTimeMs = GetEnterpriseHeadPredictTimeMs();
                 PxrSensorState2 sensorState = new PxrSensorState2();
                 int sensorFrameIndex = 0;
-                int result = PXR_EnterprisePlugin.Pxr_GetPredictedMainSensorState2(
+                int result = PicoEnterpriseTelemetryProvider.GetLegacyHeadState(
                     predictTimeMs,
                     ref sensorState,
                     ref sensorFrameIndex);
@@ -497,7 +661,7 @@ namespace Robot
                     Interlocked.Increment(ref _enterpriseHeadSamplesInWindow);
                     // Publish the native sample before any diagnostic JSON work so
                     // a serialization failure cannot stall live TCP tracking.
-                    UpdateLatestEnterpriseHead(sensorState);
+                    UpdateLatestEnterpriseHead(sensorState, preferOfficialHeadPose);
                 }
 
                 if (!serializeDiagnostics)
@@ -510,7 +674,7 @@ namespace Robot
                 data["predictTimeMs"] = predictTimeMs;
                 data["predictTimeMode"] = useDynamicPredictedDisplayTimeForEnterpriseHead
                     ? "dynamic"
-                    : "sample_interval";
+                    : "latest";
                 data["nativeResult"] = result;
                 return BuildEnvelope("enterprise", "head", Interlocked.Increment(ref _enterpriseHeadSeq),
                     result == 0, data, null);
@@ -531,15 +695,9 @@ namespace Robot
                 return PXR_Enterprise.GetPredictedDisplayTime();
             }
 
-            long nowTicks = Stopwatch.GetTimestamp();
-            long previousTicks = _lastEnterpriseHeadSampleTicks;
-            _lastEnterpriseHeadSampleTicks = nowTicks;
-            if (previousTicks <= 0)
-            {
-                return 0;
-            }
-
-            return (nowTicks - previousTicks) * 1000.0 / Stopwatch.Frequency;
+            // A prediction horizon is not a polling interval. Production collection uses
+            // the latest available sample, so request it explicitly with a zero horizon.
+            return 0;
         }
 
         private string BuildEnterpriseControllerLine(bool serializeDiagnostics)
@@ -547,7 +705,8 @@ namespace Robot
             try
             {
                 double predictTimeMs = GetEnterpriseControllerPredictTimeMs();
-                PoseInfo[] poses = PXR_Enterprise.GetControllerPose(predictTimeMs);
+                PoseInfo[] poses =
+                    PicoEnterpriseTelemetryProvider.GetLegacyControllerPose(predictTimeMs);
                 ControllerImuData[] controllerImu = GetLatestTobControllerImu();
                 if (poses != null || controllerImu != null)
                 {
@@ -635,6 +794,7 @@ namespace Robot
             {
                 json["pose"] = BuildPoseJson(poseInfo);
             }
+            AppendNativePosePair(json, CreateNativePosePair(poseInfo));
             AppendTobControllerImu(json, CreateTobControllerImu(controllerImu, index));
 
             return json;
@@ -822,25 +982,127 @@ namespace Robot
             json["timeStampNs"] = poseTimeStampNs;
             json["poseTimeStampNs"] = poseTimeStampNs;
             AppendNativeKinematics(json, CreateNativePoseKinematics(sensorState));
+            AppendNativePosePair(json, CreateNativePosePair(sensorState));
             return json;
         }
 
-        private static void UpdateLatestEnterpriseHead(PxrSensorState2 sensorState)
+        private static void UpdateLatestEnterpriseHead(
+            PxrSensorState2 sensorState,
+            bool preferOfficialPose)
         {
             long poseTimeStampNs = unchecked((long)sensorState.poseTimeStampNs);
+            OfficialHeadTelemetry officialTelemetry = GetLatestOfficialHeadTelemetry();
             EnterpriseHeadTcpPose head = new EnterpriseHeadTcpPose
             {
                 HasPose = true,
                 Pose = GetPoseStr(sensorState.pose.position, sensorState.pose.orientation),
                 Status = sensorState.status,
                 TimeStampNs = poseTimeStampNs,
+                PoseError = 0,
+                PoseSource = "pxr_sensor_state2",
+                NativePosePair = CreateNativePosePair(sensorState),
+                OfficialTelemetry = officialTelemetry,
                 NativeKinematics = CreateNativePoseKinematics(sensorState)
             };
+            if (preferOfficialPose && officialTelemetry.PoseAvailable)
+            {
+                head.Pose = officialTelemetry.Pose;
+                head.Status = officialTelemetry.PoseConfidence;
+                head.TimeStampNs = officialTelemetry.PoseTimestampNs;
+                head.PoseError = officialTelemetry.PoseError;
+                head.PoseSource = "pico_enterprise_get_head_pose_sdk_3_4_0";
+            }
             lock (s_latestEnterpriseHeadLock)
             {
                 s_latestEnterpriseHead = head;
                 s_latestEnterpriseHeadSampleSeq++;
                 s_hasLatestEnterpriseHead = true;
+            }
+        }
+
+        private static OfficialHeadTelemetry CreateOfficialHeadTelemetry(
+            Unity.XR.PICO.TOBSupport.Pose pose,
+            IMUData imu)
+        {
+            OfficialHeadTelemetry telemetry = new OfficialHeadTelemetry();
+            if (pose != null &&
+                IsFinite(pose.x) && IsFinite(pose.y) && IsFinite(pose.z) &&
+                IsFinite(pose.rx) && IsFinite(pose.ry) && IsFinite(pose.rz) &&
+                IsFinite(pose.rw) &&
+                pose.rx * pose.rx + pose.ry * pose.ry + pose.rz * pose.rz +
+                    pose.rw * pose.rw > 1.0e-16)
+            {
+                telemetry.PoseAvailable = true;
+                telemetry.PoseTimestampNs = pose.timestamp;
+                telemetry.PoseConfidence = pose.confidence;
+                telemetry.PoseError = pose.poseError;
+                telemetry.Pose = GetPoseStr(
+                    new Vector3((float)pose.x, (float)pose.y, (float)pose.z),
+                    new Quaternion(
+                        (float)pose.rx,
+                        (float)pose.ry,
+                        (float)pose.rz,
+                        (float)pose.rw));
+            }
+
+            if (imu != null &&
+                IsFinite(imu.vx) && IsFinite(imu.vy) && IsFinite(imu.vz) &&
+                IsFinite(imu.ax) && IsFinite(imu.ay) && IsFinite(imu.az) &&
+                IsFinite(imu.wx) && IsFinite(imu.wy) && IsFinite(imu.wz) &&
+                IsFinite(imu.w_ax) && IsFinite(imu.w_ay) && IsFinite(imu.w_az))
+            {
+                telemetry.ImuAvailable = true;
+                telemetry.ImuTimestampNs = imu.timestamp;
+                telemetry.LinearVelocityNative =
+                    new DoubleVector3(imu.vx, imu.vy, imu.vz);
+                telemetry.LinearAccelerationNative =
+                    new DoubleVector3(imu.ax, imu.ay, imu.az);
+                telemetry.AngularVelocityNative =
+                    new DoubleVector3(imu.wx, imu.wy, imu.wz);
+                telemetry.AngularAccelerationNative =
+                    new DoubleVector3(imu.w_ax, imu.w_ay, imu.w_az);
+            }
+
+            return telemetry;
+        }
+
+        private static void MergeOfficialHeadTelemetry(
+            ref OfficialHeadTelemetry destination,
+            OfficialHeadTelemetry update)
+        {
+            if (update.PoseAvailable)
+            {
+                destination.PoseAvailable = true;
+                destination.Pose = update.Pose;
+                destination.PoseTimestampNs = update.PoseTimestampNs;
+                destination.PoseConfidence = update.PoseConfidence;
+                destination.PoseError = update.PoseError;
+            }
+
+            if (update.ImuAvailable)
+            {
+                destination.ImuAvailable = true;
+                destination.ImuTimestampNs = update.ImuTimestampNs;
+                destination.LinearVelocityNative = update.LinearVelocityNative;
+                destination.LinearAccelerationNative = update.LinearAccelerationNative;
+                destination.AngularVelocityNative = update.AngularVelocityNative;
+                destination.AngularAccelerationNative = update.AngularAccelerationNative;
+            }
+        }
+
+        private static OfficialHeadTelemetry GetLatestOfficialHeadTelemetry()
+        {
+            lock (s_latestOfficialHeadTelemetryLock)
+            {
+                return s_latestOfficialHeadTelemetry;
+            }
+        }
+
+        private static void ClearLatestOfficialHeadTelemetry()
+        {
+            lock (s_latestOfficialHeadTelemetryLock)
+            {
+                s_latestOfficialHeadTelemetry = new OfficialHeadTelemetry();
             }
         }
 
@@ -917,6 +1179,7 @@ namespace Robot
                 TimeStampNs = poseInfo.timestamp,
                 Type = poseInfo.type,
                 PoseError = poseInfo.poseError,
+                NativePosePair = CreateNativePosePair(poseInfo),
                 TobControllerImu = tobImu,
                 NativeKinematics = new NativePoseKinematics
                 {
@@ -1014,6 +1277,7 @@ namespace Robot
             json["poseTimeStampNs"] = poseInfo.timestamp;
             json["type"] = poseInfo.type;
             json["poseError"] = poseInfo.poseError;
+            AppendNativePosePair(json, CreateNativePosePair(poseInfo));
             AppendNativeKinematics(json, new NativePoseKinematics
             {
                 Available = poseInfo.nativeKinematicsValid,
@@ -1039,9 +1303,105 @@ namespace Robot
             };
         }
 
+        public static NativePosePair CreateNativePosePair(PxrSensorState2 sensorState)
+        {
+            long timestampNs = unchecked((long)sensorState.poseTimeStampNs);
+            return new NativePosePair
+            {
+                Local = new NativePoseSample
+                {
+                    Available = true,
+                    Pose = GetPoseStr(sensorState.pose.position, sensorState.pose.orientation),
+                    TimeStampNs = timestampNs,
+                    Status = sensorState.status
+                },
+                Global = new NativePoseSample
+                {
+                    Available = true,
+                    Pose = GetPoseStr(sensorState.globalPose.position, sensorState.globalPose.orientation),
+                    TimeStampNs = timestampNs,
+                    Status = sensorState.status
+                }
+            };
+        }
+
+        private static NativePosePair CreateNativePosePair(PoseInfo poseInfo)
+        {
+            if (poseInfo == null)
+            {
+                return new NativePosePair();
+            }
+
+            NativePosePair pair = new NativePosePair
+            {
+                Local = new NativePoseSample
+                {
+                    Available = IsValidEnterpriseControllerPose(poseInfo),
+                    Pose = GetPoseStr(
+                        new Vector3((float)poseInfo.x, (float)poseInfo.y, (float)poseInfo.z),
+                        new Quaternion((float)poseInfo.rx, (float)poseInfo.ry,
+                            (float)poseInfo.rz, (float)poseInfo.rw)),
+                    TimeStampNs = poseInfo.timestamp,
+                    Status = poseInfo.confidence
+                }
+            };
+            if (poseInfo.globalPoseValid)
+            {
+                pair.Global = new NativePoseSample
+                {
+                    Available = true,
+                    Pose = GetPoseStr(
+                        new Vector3((float)poseInfo.globalX, (float)poseInfo.globalY,
+                            (float)poseInfo.globalZ),
+                        new Quaternion((float)poseInfo.globalRx, (float)poseInfo.globalRy,
+                            (float)poseInfo.globalRz, (float)poseInfo.globalRw)),
+                    TimeStampNs = poseInfo.globalTimestamp,
+                    Status = poseInfo.globalConfidence
+                };
+            }
+            return pair;
+        }
+
+        public static void AppendNativePosePair(JsonData deviceJson, NativePosePair pair)
+        {
+            if (deviceJson == null)
+            {
+                return;
+            }
+
+            RemoveJsonKeyIfPresent(deviceJson, "native_pose_pair_v1");
+            if (!pair.Local.Available && !pair.Global.Available)
+            {
+                return;
+            }
+
+            JsonData value = new JsonData();
+            value["schema_version"] = NativePosePairSchemaVersion;
+            value["local"] = BuildNativePoseSampleJson(pair.Local, "pico_in_app");
+            value["global"] = BuildNativePoseSampleJson(pair.Global, "pico_global");
+            deviceJson["native_pose_pair_v1"] = value;
+        }
+
+        private static JsonData BuildNativePoseSampleJson(NativePoseSample sample, string frame)
+        {
+            JsonData value = new JsonData();
+            value["available"] = sample.Available;
+            value["frame"] = frame;
+            value["pose"] = sample.Pose ?? InvalidControllerPose;
+            value["timestamp_ns"] = sample.TimeStampNs;
+            value["confidence"] = sample.Status;
+            return value;
+        }
+
         public static void AppendNativeKinematics(JsonData deviceJson, NativePoseKinematics kinematics)
         {
-            if (deviceJson == null || !kinematics.Available)
+            if (deviceJson == null)
+            {
+                return;
+            }
+
+            RemoveJsonKeyIfPresent(deviceJson, "imu_v1");
+            if (!kinematics.Available)
             {
                 return;
             }
@@ -1058,7 +1418,13 @@ namespace Robot
 
         public static void AppendTobControllerImu(JsonData deviceJson, TobControllerImu imuData)
         {
-            if (deviceJson == null || !imuData.Available)
+            if (deviceJson == null)
+            {
+                return;
+            }
+
+            RemoveJsonKeyIfPresent(deviceJson, "tob_controller_imu_v1");
+            if (!imuData.Available)
             {
                 return;
             }
@@ -1071,6 +1437,55 @@ namespace Robot
             imu["angular_velocity_native"] = BuildVectorJson(imuData.AngularVelocityNative);
             imu["angular_acceleration_native"] = BuildVectorJson(imuData.AngularAccelerationNative);
             deviceJson["tob_controller_imu_v1"] = imu;
+        }
+
+        public static void AppendOfficialHeadTelemetry(
+            JsonData deviceJson,
+            OfficialHeadTelemetry telemetry)
+        {
+            if (deviceJson == null)
+            {
+                return;
+            }
+
+            RemoveJsonKeyIfPresent(deviceJson, "sdk_pose_v1");
+            RemoveJsonKeyIfPresent(deviceJson, "sdk_imu_v1");
+
+            if (telemetry.PoseAvailable)
+            {
+                JsonData pose = new JsonData();
+                pose["schema_version"] = OfficialHeadPoseSchemaVersion;
+                pose["predict_time_ns"] = OfficialHeadTelemetryPredictTimeNs;
+                pose["pose"] = telemetry.Pose;
+                pose["timestamp_ns"] = telemetry.PoseTimestampNs;
+                pose["confidence"] = telemetry.PoseConfidence;
+                pose["pose_error"] = telemetry.PoseError;
+                deviceJson["sdk_pose_v1"] = pose;
+            }
+
+            if (telemetry.ImuAvailable)
+            {
+                JsonData imu = new JsonData();
+                imu["schema_version"] = OfficialHeadImuSchemaVersion;
+                imu["timestamp_ns"] = telemetry.ImuTimestampNs;
+                imu["linear_velocity_native"] =
+                    BuildVectorJson(telemetry.LinearVelocityNative);
+                imu["linear_acceleration_native"] =
+                    BuildVectorJson(telemetry.LinearAccelerationNative);
+                imu["angular_velocity_native"] =
+                    BuildVectorJson(telemetry.AngularVelocityNative);
+                imu["angular_acceleration_native"] =
+                    BuildVectorJson(telemetry.AngularAccelerationNative);
+                deviceJson["sdk_imu_v1"] = imu;
+            }
+        }
+
+        private static void RemoveJsonKeyIfPresent(JsonData value, string key)
+        {
+            if (value.ContainsKey(key))
+            {
+                value.Remove(key);
+            }
         }
 
         private static Vector3 ToVector3(PxrVector3f value)
@@ -1110,6 +1525,8 @@ namespace Robot
             envelope["captureUnixTimeMs"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             envelope["threadId"] = Thread.CurrentThread.ManagedThreadId;
             envelope["success"] = success;
+            TrackingOriginTelemetry.AppendTo(envelope);
+            LargeSpaceTelemetry.AppendTo(envelope);
             if (data != null)
             {
                 envelope["data"] = data;
@@ -1249,13 +1666,32 @@ namespace Robot
             public DoubleVector3 AngularAccelerationNative;
         }
 
+        public struct OfficialHeadTelemetry
+        {
+            public bool PoseAvailable;
+            public string Pose;
+            public long PoseTimestampNs;
+            public int PoseConfidence;
+            public int PoseError;
+            public bool ImuAvailable;
+            public long ImuTimestampNs;
+            public DoubleVector3 LinearVelocityNative;
+            public DoubleVector3 LinearAccelerationNative;
+            public DoubleVector3 AngularVelocityNative;
+            public DoubleVector3 AngularAccelerationNative;
+        }
+
         public struct EnterpriseHeadTcpPose
         {
             public bool HasPose;
             public string Pose;
             public int Status;
             public long TimeStampNs;
+            public int PoseError;
+            public string PoseSource;
+            public NativePosePair NativePosePair;
             public NativePoseKinematics NativeKinematics;
+            public OfficialHeadTelemetry OfficialTelemetry;
         }
 
         public struct EnterpriseControllerTcpPose
@@ -1266,8 +1702,23 @@ namespace Robot
             public long TimeStampNs;
             public int Type;
             public int PoseError;
+            public NativePosePair NativePosePair;
             public NativePoseKinematics NativeKinematics;
             public TobControllerImu TobControllerImu;
+        }
+
+        public struct NativePoseSample
+        {
+            public bool Available;
+            public string Pose;
+            public long TimeStampNs;
+            public int Status;
+        }
+
+        public struct NativePosePair
+        {
+            public NativePoseSample Local;
+            public NativePoseSample Global;
         }
 
         private struct ControllerInputSnapshot

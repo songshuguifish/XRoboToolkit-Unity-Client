@@ -4,6 +4,11 @@ import android.os.Bundle;
 import android.os.Parcelable;
 import android.util.Log;
 
+import com.picoxr.tobservice.ToBServiceUtils;
+import com.pvr.tobservice.interfaces.IToBServiceProxy;
+import com.pvr.tobservice.model.IMUData;
+import com.pvr.tobservice.model.Pose;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -25,11 +30,17 @@ public final class EnterprisePoseBridge {
     private static final long PROFILE_LOG_INTERVAL = 1000L;
     private static final int CONTROLLER_IMU_COUNT = 2;
     private static final int CONTROLLER_IMU_PACKED_FIELDS = 14;
+    private static final int HEAD_POSE_PACKED_FIELDS = 12;
+    private static final int HEAD_IMU_PACKED_FIELDS = 14;
     // Reused bridge storage: [count, (valid,timestamp,vx,vy,vz,ax,ay,az,wx,wy,wz,w_ax,w_ay,w_az) * 2].
     // Unity copies primitive Java arrays into managed memory before the JNI local frame is
     // popped, so returning this synchronized scratch array does not expose mutable state.
     private static final double[] controllerImuPacked =
         new double[1 + CONTROLLER_IMU_COUNT * CONTROLLER_IMU_PACKED_FIELDS];
+    // [poseValid,timestamp,x,y,z,rw,rx,ry,rz,type,confidence,poseError,
+    //  imuValid,timestamp,vx,vy,vz,ax,ay,az,wx,wy,wz,w_ax,w_ay,w_az].
+    private static final double[] headTelemetryPacked =
+        new double[HEAD_POSE_PACKED_FIELDS + HEAD_IMU_PACKED_FIELDS];
 
     private static long headProfileCount;
     private static long controllerProfileCount;
@@ -368,6 +379,65 @@ public final class EnterprisePoseBridge {
             if (count % PROFILE_LOG_INTERVAL == 0L) {
                 Log.w(TAG, "packed controller IMU failed: " + describeThrowable(t));
             }
+            return null;
+        }
+    }
+
+    /**
+     * Allocation-light access to the SDK 3.4 IToBServiceProxy. The public Unity wrapper
+     * converts both objects through JSON and logs every head pose at error priority; this
+     * packed path preserves the same vendor objects without that per-sample overhead.
+     */
+    public static synchronized double[] getHeadTelemetryPacked(long predictTime) {
+        try {
+            ToBServiceUtils utils = ToBServiceUtils.getInstance();
+            IToBServiceProxy binder = utils == null ? null : utils.getServiceBinder();
+            if (binder == null) {
+                return null;
+            }
+
+            Pose pose = binder.getHeadPose(predictTime);
+            IMUData imu = binder.getHeadIMUData(predictTime);
+            for (int i = 0; i < headTelemetryPacked.length; i++) {
+                headTelemetryPacked[i] = 0.0;
+            }
+
+            if (pose != null) {
+                headTelemetryPacked[0] = 1.0;
+                headTelemetryPacked[1] = pose.timestamp;
+                headTelemetryPacked[2] = pose.x;
+                headTelemetryPacked[3] = pose.y;
+                headTelemetryPacked[4] = pose.z;
+                headTelemetryPacked[5] = pose.rw;
+                headTelemetryPacked[6] = pose.rx;
+                headTelemetryPacked[7] = pose.ry;
+                headTelemetryPacked[8] = pose.rz;
+                headTelemetryPacked[9] = pose.type;
+                headTelemetryPacked[10] = pose.confidence;
+                headTelemetryPacked[11] = pose.poseError;
+            }
+
+            int imuOffset = HEAD_POSE_PACKED_FIELDS;
+            if (imu != null) {
+                headTelemetryPacked[imuOffset] = 1.0;
+                headTelemetryPacked[imuOffset + 1] = imu.timestamp;
+                headTelemetryPacked[imuOffset + 2] = imu.vx;
+                headTelemetryPacked[imuOffset + 3] = imu.vy;
+                headTelemetryPacked[imuOffset + 4] = imu.vz;
+                headTelemetryPacked[imuOffset + 5] = imu.ax;
+                headTelemetryPacked[imuOffset + 6] = imu.ay;
+                headTelemetryPacked[imuOffset + 7] = imu.az;
+                headTelemetryPacked[imuOffset + 8] = imu.wx;
+                headTelemetryPacked[imuOffset + 9] = imu.wy;
+                headTelemetryPacked[imuOffset + 10] = imu.wz;
+                headTelemetryPacked[imuOffset + 11] = imu.w_ax;
+                headTelemetryPacked[imuOffset + 12] = imu.w_ay;
+                headTelemetryPacked[imuOffset + 13] = imu.w_az;
+            }
+
+            return pose == null && imu == null ? null : headTelemetryPacked;
+        } catch (Throwable t) {
+            Log.w(TAG, "packed head telemetry failed: " + describeThrowable(t));
             return null;
         }
     }

@@ -19,6 +19,7 @@ using UnityEngine.XR;
 using UnityEngine.XR.Management;
 using System.Linq;
 using System.Runtime.InteropServices;
+using Unity.XR.CoreUtils;
 
 namespace Unity.XR.PXR
 {
@@ -103,6 +104,7 @@ namespace Unity.XR.PXR
         private bool createMRCOverlaySucceed = false;
         private int imageIndex;
         private UInt32 imageCounts = 0;
+        private Material textureM;
 
         private static ExternalCameraInfo cameraInfo;
         private bool mrcCamObjActived = false;
@@ -143,13 +145,36 @@ namespace Unity.XR.PXR
         [HideInInspector]
         public bool useRecommendedAntiAliasingLevel = true;
 
-        private List<PxrEventDataBuffer> eventList = new List<PxrEventDataBuffer>();
+        [HideInInspector]
+        public bool usePremultipliedAlpha = false;
+
+        // LayerBlend
+        [HideInInspector]
+        public bool useLayerBlend = false;
+        [HideInInspector]
+        public PxrBlendFactor srcColor = PxrBlendFactor.PxrBlendFactorOne;
+        [HideInInspector]
+        public PxrBlendFactor dstColor = PxrBlendFactor.PxrBlendFactorOne;
+        [HideInInspector]
+        public PxrBlendFactor srcAlpha = PxrBlendFactor.PxrBlendFactorOne;
+        [HideInInspector]
+        public PxrBlendFactor dstAlpha = PxrBlendFactor.PxrBlendFactorOne;
+
+        public static event Action<PxrSpatialMapSizeLimitedReason> SpatialMapSizeLimited;
+        public static event Action<PxrEventAutoRoomCaptureUpdated> AutoRoomCaptureUpdated;
+        public static event Action<PxrEventSenseDataProviderStateChanged> SenseDataProviderStateChanged;
+        public static event Action<ulong> SenseDataUpdated;
+        public static event Action SpatialAnchorDataUpdated;
+        public static event Action<List<PxrSpatialMeshInfo>> SpatialMeshDataUpdated;
+        public static event Action SceneAnchorDataUpdated;
+        public static event Action<List<PxrPlaneData>> PlaneDetectionDataUpdated;
+        public static event Action SemiAutoCaptureDataUpdated;
+        public static event Action<bool> EnableVideoSeeThroughAction;
+        public static Action<PxrVstStatus> VstDisplayStatusChanged;
 
         #region 2.0 API Deprecate
         [Obsolete("Deprecated.Only Support PICO 4.")]
         public static event Action<PxrEventAnchorEntityCreated> AnchorEntityCreated;
-        [Obsolete("Deprecated.Only Support PICO 4.")]
-        public static event Action<PxrEventSpatialTrackingStateUpdate> SpatialTrackingStateUpdate;
         [Obsolete("Deprecated.Only Support PICO 4.")]
         public static event Action<PxrEventAnchorEntityPersisted> AnchorEntityPersisted;
         [Obsolete("Deprecated.Only Support PICO 4.")]
@@ -161,18 +186,7 @@ namespace Unity.XR.PXR
         [Obsolete("Deprecated.Only Support PICO 4.")]
         public static event Action<PxrEventSpatialSceneCaptured> SpatialSceneCaptured;
         #endregion
-
-        public static event Action<PxrSpatialMapSizeLimitedReason> SpatialMapSizeLimited;
-        public static event Action<PxrEventAutoRoomCaptureUpdated> AutoRoomCaptureUpdated;
-        public static event Action<PxrEventSenseDataProviderStateChanged> SenseDataProviderStateChanged;
-        public static event Action<PxrVstStatus> VstDisplayStatusChanged;
-        public static event Action<ulong> SenseDataUpdated;
-        public static event Action SpatialAnchorDataUpdated;
-        public static event Action<List<PxrSpatialMeshInfo>> SpatialMeshDataUpdated;
-        public static event Action SceneAnchorDataUpdated;
-        public static event Action SemiAutoCaptureDataUpdated;
-        public static event Action<bool> EnableVideoSeeThroughAction;
-
+        
         private static bool _enableVideoSeeThrough;
         [HideInInspector]
         public static bool EnableVideoSeeThrough
@@ -198,14 +212,6 @@ namespace Unity.XR.PXR
 
         void Awake()
         {
-            //version log
-            Debug.Log("PXRLog XR Platform----SDK Version:" + PXR_Plugin.System.UPxr_GetSDKVersion());
-
-            //log level
-            int logLevel = PXR_Plugin.System.UPxr_GetConfigInt(ConfigType.UnityLogLevel);
-            PLog.LogLevel appliedLogLevel = PLog.NormalizeLogLevel(logLevel);
-            Debug.Log("PXRLog XR Platform----SDK logLevel requested:" + logLevel + ", applied:" + (int)appliedLogLevel);
-            PLog.logLevel = appliedLogLevel;
             eyeCamera = new Camera[3];
             Camera[] cam = gameObject.GetComponentsInChildren<Camera>();
             for (int i = 0; i < cam.Length; i++)
@@ -224,9 +230,16 @@ namespace Unity.XR.PXR
                 }
             }
 
+#if PICO_OPENXR_SDK
+#else
+            //version log
+            Debug.Log("PXRLog XR Platform----SDK Version:" + PXR_Plugin.System.UPxr_GetSDKVersion());
+
+            //log level
+            int logLevel = PXR_Plugin.System.UPxr_GetConfigInt(ConfigType.UnityLogLevel);
+            Debug.Log("PXRLog XR Platform----SDK logLevel:" + logLevel);
+            PLog.logLevel = (PLog.LogLevel)logLevel;
             PXR_Plugin.System.UPxr_EnableEyeTracking(eyeTracking);
-            PXR_Plugin.System.UPxr_EnableFaceTracking(faceTracking);
-            PXR_Plugin.System.UPxr_EnableLipSync(lipsyncTracking);
 
             StartCoroutine("SetFoveationLevel");
 
@@ -251,23 +264,19 @@ namespace Unity.XR.PXR
                 }
             }
 
-            if (eyeTracking)
-            {
-                PXR_Plugin.MotionTracking.UPxr_WantEyeTrackingService();
-            }
-            if (faceTracking || lipsyncTracking)
-            {
-                PXR_Plugin.MotionTracking.UPxr_WantFaceTrackingService();
-            }
-            if (bodyTracking)
-            {
-                PXR_Plugin.MotionTracking.UPxr_WantBodyTrackingService();
-            }
-
             Debug.LogFormat(TAG_MRC + "Awake openMRC = {0} ,MRCInitSucceed = {1}.", openMRC, initMRCSucceed);
             PXR_Plugin.System.UPxr_LogSdkApi("pico_msaa|" + QualitySettings.antiAliasing.ToString());
-        }
+#endif
 
+            PXR_Plugin.Render.UPxr_EnablePremultipliedAlpha(usePremultipliedAlpha);
+            PxrLayerBlend layerBlend = new PxrLayerBlend();
+            layerBlend.srcColor = srcColor;
+            layerBlend.dstColor = dstColor;
+            layerBlend.srcAlpha = srcAlpha;
+            layerBlend.dstAlpha = dstAlpha;
+            PXR_Plugin.Render.UPxr_SetLayerBlend(useLayerBlend, layerBlend);
+        }
+#if !PICO_OPENXR_SDK
         IEnumerator SetFoveationLevel()
         {
             int num = 3;
@@ -287,9 +296,11 @@ namespace Unity.XR.PXR
                 yield return new WaitForSeconds(1);
             } while (!result && num-- > 0);
         }
-
+#endif
         void OnApplicationPause(bool pause)
         {
+#if PICO_OPENXR_SDK
+#else
             if (!pause)
             {
                 PXR_Plugin.Boundary.UPxr_SetSeeThroughBackground(EnableVideoSeeThrough);
@@ -299,6 +310,8 @@ namespace Unity.XR.PXR
                     isNeedResume = false;
                 }
             }
+#endif
+
         }
 
         private void OnApplicationQuit()
@@ -306,7 +319,7 @@ namespace Unity.XR.PXR
             Debug.LogFormat(TAG_MRC + "OnApplicationQuit openMRC = {0} ,MRCInitSucceed = {1}.", openMRC, initMRCSucceed);
             if (openMRC && initMRCSucceed)
             {
-                PXR_Plugin.Render.UPxr_DestroyLayer(LAYER_MRC);
+                PXR_Plugin.Render.UPxr_DestroyLayerByRender(LAYER_MRC);
             }
         }
 
@@ -335,26 +348,22 @@ namespace Unity.XR.PXR
 #if UNITY_EDITOR
             Application.targetFrameRate = 72;
 #endif
+#if PICO_OPENXR_SDK
+#else
             PXR_Plugin.Controller.UPxr_SetControllerDelay();
 
             if (adaptiveResolution)
             {
                 XRSettings.eyeTextureResolutionScale = maxEyeTextureScale;
             }
+#endif
+            
         }
 
         void Update()
         {
-            //recenter callback
-            if (PXR_Plugin.System.UPxr_GetHomeKey())
-            {
-                if (PXR_Plugin.System.RecenterSuccess != null)
-                {
-                    PXR_Plugin.System.RecenterSuccess();
-                }
-                PXR_Plugin.System.UPxr_InitHomeKey();
-            }
-
+#if PICO_OPENXR_SDK
+#else
             if (openMRC && initMRCSucceed)
             {
                 UpdateMRCCam();
@@ -365,9 +374,7 @@ namespace Unity.XR.PXR
             {
                 UpdateAdaptiveResolution();
             }
-
-            //pollEvent
-            PollEvent();
+#endif
         }
 
         void UpdateAdaptiveResolution()
@@ -388,6 +395,8 @@ namespace Unity.XR.PXR
 
         void OnEnable()
         {
+
+#if !PICO_OPENXR_SDK
             if (PXR_OverLay.Instances.Count > 0)
             {
                 if (Camera.main.gameObject.GetComponent<PXR_OverlayManager>() == null)
@@ -407,12 +416,31 @@ namespace Unity.XR.PXR
                     }
                 }
             }
+#endif
+
+
+            if (PXR_CompositionLayer.Instances.Count > 0)
+            {
+                if (Camera.main.gameObject.GetComponent<PXR_CompositionLayerManager>() == null)
+                {
+                    Camera.main.gameObject.AddComponent<PXR_CompositionLayerManager>();
+                }
+
+                foreach (var layer in PXR_CompositionLayer.Instances)
+                {
+                    if (eyeCamera[0] != null && eyeCamera[0].enabled)
+                    {
+                        layer.RefreshCamera(eyeCamera[0], eyeCamera[0]);
+                    }
+                    else if (eyeCamera[1] != null && eyeCamera[1].enabled)
+                    {
+                        layer.RefreshCamera(eyeCamera[1], eyeCamera[2]);
+                    }
+                }
+            }
+            
             if (openMRC)
             {
-                if (GraphicsDeviceType.Vulkan == SystemInfo.graphicsDeviceType)
-                {
-                    PXR_Plugin.Sensor.UPxr_HMDUpdateSwitch(false);
-                }
 
 #if UNITY_6000_0_OR_NEWER
                 if (GraphicsSettings.defaultRenderPipeline != null)
@@ -432,8 +460,6 @@ namespace Unity.XR.PXR
                     Camera.onPreRender += OnPreRenderCallBack;
                     isURP = false;
                 }
-
-
             }
         }
 
@@ -446,207 +472,185 @@ namespace Unity.XR.PXR
             }
         }
 
-        private void PollEvent()
+        public void PollEvent(XrEventDataBuffer eventDB)
         {
-            eventList.Clear();
-            bool ret = PXR_Plugin.MixedReality.UPxr_PollEventQueue(ref eventList);
-            if (ret)
+            switch (eventDB.type)
             {
-                for (int i = 0; i < eventList.Count; i++)
+                case XrStructureType.XR_TYPE_EVENT_DATA_SPATIAL_SCENE_CAPTURED_BD:
                 {
-                    PLog.d("PXRLog", "PollEvent" + eventList[i].type);
-                    switch (eventList[i].type)
+                    if (SpatialSceneCaptured != null)
                     {
-                        case PxrStructureType.AnchorEntityCreated:
-                            {
-                                if (AnchorEntityCreated != null)
-                                {
-                                    PxrEventAnchorEntityCreated info = new PxrEventAnchorEntityCreated()
-                                    {
-                                        taskId = BitConverter.ToUInt64(eventList[i].data, 0),
-                                        result = (PxrResult)BitConverter.ToInt32(eventList[i].data, 8),
-                                        anchorHandle = BitConverter.ToUInt64(eventList[i].data, 16),
-                                    };
+                        PxrEventSpatialSceneCaptured info = new PxrEventSpatialSceneCaptured()
+                        {
+                            taskId = BitConverter.ToUInt64(eventDB.data, 0),
+                            result = PxrResult.SUCCESS,
+                            status = (PxrSpatialSceneCaptureStatus)BitConverter.ToUInt32(eventDB.data, 12),
+                        };
+                        SpatialSceneCaptured(info);
+                    }
+                    break;
+                }
+                case XrStructureType.XR_TYPE_EVENT_DATA_ANCHOR_ENTITY_LOADED_BD:
+                {
+                    if (AnchorEntityLoaded != null)
+                    {
+                        PxrEventAnchorEntityLoaded info = new PxrEventAnchorEntityLoaded()
+                        {
+                            taskId = BitConverter.ToUInt64(eventDB.data, 0),
+                            result = (PxrResult)BitConverter.ToInt32(eventDB.data, 8),
+                            count = BitConverter.ToUInt32(eventDB.data, 12),
+                            location = (PxrPersistLocation)BitConverter.ToInt32(eventDB.data, 16)
+                        };
+                        AnchorEntityLoaded(info);
+                    }
+                    break;
+                }
+                case XrStructureType.XR_TYPE_EVENT_DATA_ANCHOR_ENTITY_CLEARED_BD:
+                {
+                    if (AnchorEntityCleared != null)
+                    {
+                        PxrEventAnchorEntityCleared info = new PxrEventAnchorEntityCleared()
+                        {
+                            taskId = BitConverter.ToUInt64(eventDB.data, 0),
+                            result = (PxrResult)BitConverter.ToInt32(eventDB.data, 8),
+                            location = (PxrPersistLocation)BitConverter.ToInt32(eventDB.data, 12)
+                        };
+                        AnchorEntityCleared(info);
+                    }
 
-                                    byte[] byteArray = new byte[16];
-                                    var value0 = BitConverter.ToUInt64(eventList[i].data, 24);
-                                    var value1 = BitConverter.ToUInt64(eventList[i].data, 32);
-                                    BitConverter.GetBytes(value0).CopyTo(byteArray, 0);
-                                    BitConverter.GetBytes(value1).CopyTo(byteArray, 8);
-                                    info.uuid = new Guid(byteArray);
-                                    AnchorEntityCreated(info);
-                                }
-                            }
-                            break;
-                        case PxrStructureType.AnchorEntityPersisted:
-                            {
-                                if (AnchorEntityPersisted != null)
-                                {
-                                    PxrEventAnchorEntityPersisted info = new PxrEventAnchorEntityPersisted()
-                                    {
-                                        taskId = BitConverter.ToUInt64(eventList[i].data, 0),
-                                        result = (PxrResult)BitConverter.ToInt32(eventList[i].data, 8),
-                                        location = (PxrPersistLocation)BitConverter.ToInt32(eventList[i].data, 12)
-                                    };
-                                    AnchorEntityPersisted(info);
-                                }
-                            }
-                            break;
-                        case PxrStructureType.AnchorEntityUnPersisted:
-                            {
-                                if (AnchorEntityUnPersisted != null)
-                                {
-                                    PxrEventAnchorEntityUnPersisted info = new PxrEventAnchorEntityUnPersisted()
-                                    {
-                                        taskId = BitConverter.ToUInt64(eventList[i].data, 0),
-                                        result = (PxrResult)BitConverter.ToInt32(eventList[i].data, 8),
-                                        location = (PxrPersistLocation)BitConverter.ToInt32(eventList[i].data, 12)
-                                    };
-                                    AnchorEntityUnPersisted(info);
-                                }
-                            }
-                            break;
-                        case PxrStructureType.AnchorEntityCleared:
-                            {
-                                if (AnchorEntityCleared != null)
-                                {
-                                    PxrEventAnchorEntityCleared info = new PxrEventAnchorEntityCleared()
-                                    {
-                                        taskId = BitConverter.ToUInt64(eventList[i].data, 0),
-                                        result = (PxrResult)BitConverter.ToInt32(eventList[i].data, 8),
-                                        location = (PxrPersistLocation)BitConverter.ToInt32(eventList[i].data, 12)
-                                    };
-                                    AnchorEntityCleared(info);
-                                }
-                            }
-                            break;
-                        case PxrStructureType.AnchorEntityLoaded:
-                            {
-                                if (AnchorEntityLoaded != null)
-                                {
-                                    PxrEventAnchorEntityLoaded info = new PxrEventAnchorEntityLoaded()
-                                    {
-                                        taskId = BitConverter.ToUInt64(eventList[i].data, 0),
-                                        result = (PxrResult)BitConverter.ToInt32(eventList[i].data, 8),
-                                        count = BitConverter.ToUInt32(eventList[i].data, 12),
-                                        location = (PxrPersistLocation)BitConverter.ToInt32(eventList[i].data, 16)
-                                    };
-                                    AnchorEntityLoaded(info);
-                                }
-                            }
-                            break;
-                        case PxrStructureType.SpatialTrackingStateUpdate:
-                            {
-                                if (SpatialTrackingStateUpdate != null)
-                                {
-                                    PxrEventSpatialTrackingStateUpdate info = new PxrEventSpatialTrackingStateUpdate()
-                                    {
-                                        state = (PxrSpatialTrackingState)BitConverter.ToInt32(eventList[i].data, 0),
-                                        message = (PxrSpatialTrackingStateMessage)BitConverter.ToInt32(eventList[i].data, 4),
-                                    };
-                                    SpatialTrackingStateUpdate(info);
-                                }
-                            }
-                            break;
-                        case PxrStructureType.SpatialSceneCaptured:
-                            {
-                                if (SpatialSceneCaptured != null)
-                                {
-                                    PxrEventSpatialSceneCaptured info = new PxrEventSpatialSceneCaptured()
-                                    {
-                                        taskId = BitConverter.ToUInt64(eventList[i].data, 0),
-                                        result = (PxrResult)BitConverter.ToInt32(eventList[i].data, 8),
-                                        status = (PxrSpatialSceneCaptureStatus)BitConverter.ToUInt32(eventList[i].data, 12),
-                                    };
-                                    SpatialSceneCaptured(info);
-                                }
-                            }
-                            break;
-                        case PxrStructureType.AutoRoomCaptureUpdated:
-                            {
-                                if (AutoRoomCaptureUpdated != null)
-                                {
-                                    PxrEventAutoRoomCaptureUpdated info = new PxrEventAutoRoomCaptureUpdated()
-                                    {
-                                        state = (PxrSpatialSceneCaptureStatus)BitConverter.ToUInt32(eventList[i].data, 0),
-                                        msg = BitConverter.ToUInt32(eventList[i].data, 4),
-                                    };
-                                    AutoRoomCaptureUpdated(info);
-                                }
-                            }
-                            break;
-                        case PxrStructureType.SpatialMapSizeLimited:
-                            {
-                                if (SpatialMapSizeLimited != null)
-                                {
-                                    var reason = (PxrSpatialMapSizeLimitedReason)BitConverter.ToInt32(eventList[i].data, 0);
-                                    SpatialMapSizeLimited(reason);
-                                }
-                            }
-                            break;
-                        case PxrStructureType.SenseDataUpdated:
-                            {
-                                ulong providerHandle = BitConverter.ToUInt64(eventList[i].data, 0);
-                                if (SenseDataUpdated != null)
-                                {
-                                    SenseDataUpdated(providerHandle);
-                                }
+                    break;
+                }
+                case XrStructureType.XR_TYPE_EVENT_DATA_ANCHOR_ENTITY_UNPERSISTED_BD:
+                {
+                    if (AnchorEntityUnPersisted != null)
+                    {
+                        PxrEventAnchorEntityUnPersisted info = new PxrEventAnchorEntityUnPersisted()
+                        {
+                            taskId = BitConverter.ToUInt64(eventDB.data, 0),
+                            result = (PxrResult)BitConverter.ToInt32(eventDB.data, 8),
+                            location = (PxrPersistLocation)BitConverter.ToInt32(eventDB.data, 12)
+                        };
+                        AnchorEntityUnPersisted(info);
+                    }
+                    break;
+                }
+                case XrStructureType.XR_TYPE_EVENT_DATA_ANCHOR_ENTITY_PERSISTED_BD:
+                {
+                    if (AnchorEntityPersisted != null)
+                    {
+                        PxrEventAnchorEntityPersisted info = new PxrEventAnchorEntityPersisted()
+                        {
+                            taskId = BitConverter.ToUInt64(eventDB.data, 0),
+                            result = (PxrResult)BitConverter.ToInt32(eventDB.data, 8),
+                            location = (PxrPersistLocation)BitConverter.ToInt32(eventDB.data, 12)
+                        };
+                        AnchorEntityPersisted(info);
+                    }
+                    break;
+                }
+                case XrStructureType.XR_TYPE_EVENT_DATA_ANCHOR_ENTITY_CREATED_BD:
+                {
+                    if (AnchorEntityCreated != null)
+                    {
+                        PxrEventAnchorEntityCreated info = new PxrEventAnchorEntityCreated()
+                        {
+                            taskId = BitConverter.ToUInt64(eventDB.data, 0),
+                            result = (PxrResult)BitConverter.ToInt32(eventDB.data, 8),
+                            anchorHandle = BitConverter.ToUInt64(eventDB.data, 16),
+                        };
 
-                                if (providerHandle == PXR_Plugin.MixedReality.UPxr_GetSenseDataProviderHandle(PxrSenseDataProviderType.SpatialAnchor))
-                                {
-                                    if (SpatialAnchorDataUpdated != null)
-                                    {
-                                        SpatialAnchorDataUpdated();
-                                    }
-                                }
+                        byte[] byteArray = new byte[16];
+                        var value0 = BitConverter.ToUInt64(eventDB.data, 24);
+                        var value1 = BitConverter.ToUInt64(eventDB.data, 32);
+                        BitConverter.GetBytes(value0).CopyTo(byteArray, 0);
+                        BitConverter.GetBytes(value1).CopyTo(byteArray, 8);
+                        info.uuid = new Guid(byteArray);
+                        AnchorEntityCreated(info);
+                    }
+                    break;
+                }
+                case XrStructureType.XR_TYPE_EVENT_DATA_SENSE_DATA_PROVIDER_STATE_CHANGED:
+                {
+                    if (SenseDataProviderStateChanged != null)
+                    {
+                        PxrEventSenseDataProviderStateChanged data = new PxrEventSenseDataProviderStateChanged()
+                        {
+                            providerHandle = BitConverter.ToUInt64(eventDB.data, 0),
+                            newState = (PxrSenseDataProviderState)BitConverter.ToInt32(eventDB.data, 8),
+                        };
+                        SenseDataProviderStateChanged(data);
+                    }
 
-                                if (providerHandle == PXR_Plugin.MixedReality.UPxr_GetSenseDataProviderHandle(PxrSenseDataProviderType.SceneCapture))
-                                {
-                                    if (SceneAnchorDataUpdated != null)
-                                    {
-                                        SceneAnchorDataUpdated();
-                                    }
-                                }
+                    break;
+                }
+                case XrStructureType.XR_TYPE_EVENT_DATA_SENSE_DATA_UPDATED:
+                {
+                    ulong providerHandle = BitConverter.ToUInt64(eventDB.data, 0);
+                    if (SenseDataUpdated != null)
+                    {
+                        SenseDataUpdated(providerHandle);
+                    }
 
-                                if (providerHandle == PXR_Plugin.MixedReality.UPxr_GetSpatialMeshProviderHandle())
-                                {
-                                    StartCoroutine(QuerySpatialMeshAnchor());
-                                }
+                    if (providerHandle == PXR_Plugin.MixedReality.UPxr_GetSenseDataProviderHandle(PxrSenseDataProviderType.SpatialAnchor))
+                    {
+                        if (SpatialAnchorDataUpdated != null)
+                        {
+                            SpatialAnchorDataUpdated();
+                        }
+                    }
 
-                                if (providerHandle == PXR_Plugin.MixedReality.SemiAutoSceneCaptureProviderHandle)
-                                {
-                                    if (SemiAutoCaptureDataUpdated != null)
-                                    {
-                                        SemiAutoCaptureDataUpdated();
-                                    }
-                                }
+                    if (providerHandle == PXR_Plugin.MixedReality.UPxr_GetSenseDataProviderHandle(PxrSenseDataProviderType.SceneCapture))
+                    {
+                        if (SceneAnchorDataUpdated != null)
+                        {
+                            SceneAnchorDataUpdated();
+                        }
+                    }
+                    
+                    if (providerHandle == PXR_Plugin.MixedReality.UPxr_GetSenseDataProviderHandle(PxrSenseDataProviderType.PlaneDetection))
+                    {
+                        StartCoroutine(QueryPlaneAnchor());
+                    }
 
-                            }
-                            break;
-                        case PxrStructureType.SenseDataProviderStateChanged:
-                            {
-                                if (SenseDataProviderStateChanged != null)
-                                {
-                                    PxrEventSenseDataProviderStateChanged data = new PxrEventSenseDataProviderStateChanged()
-                                    {
-                                        providerHandle = BitConverter.ToUInt64(eventList[i].data, 0),
-                                        newState = (PxrSenseDataProviderState)BitConverter.ToInt32(eventList[i].data, 8),
-                                    };
-                                    SenseDataProviderStateChanged(data);
-                                }
-                            }
-                            break;
-                        case PxrStructureType.VSTDisplayStatusChanged:
-                            {
-                                if (VstDisplayStatusChanged != null)
-                                {
-                                    var status = (PxrVstStatus)BitConverter.ToUInt32(eventList[i].data, 0);
-                                    VstDisplayStatusChanged(status);
-                                }
-                            }
-                            break;
+                    if (providerHandle == PXR_Plugin.MixedReality.UPxr_GetSpatialMeshProviderHandle())
+                    {
+                        StartCoroutine(QuerySpatialMeshAnchor());
+                    }
+
+                    if (providerHandle == PXR_Plugin.MixedReality.SemiAutoSceneCaptureProviderHandle)
+                    {
+                        if (SemiAutoCaptureDataUpdated != null)
+                        {
+                            SemiAutoCaptureDataUpdated();
+                        }
+                    }
+
+                    break;
+                }
+
+                case XrStructureType.XR_TYPE_EVENT_DATA_AUTO_SCENE_CAPTURE_UPDATE_PICO:
+                {
+                    if (AutoRoomCaptureUpdated != null)
+                    {
+                        PxrEventAutoRoomCaptureUpdated info = new PxrEventAutoRoomCaptureUpdated()
+                        {
+                            state = (PxrSpatialSceneCaptureStatus)BitConverter.ToUInt32(eventDB.data, 0),
+                            msg = BitConverter.ToUInt32(eventDB.data, 4),
+                        };
+                            
+                        AutoRoomCaptureUpdated(info);
                     }
                 }
+                    break;
+                case XrStructureType.XR_TYPE_EVENT_DATA_SPATIAL_MAP_SIZE_LIMITED_PICO:
+                {
+                    if (SpatialMapSizeLimited != null)
+                    {
+                        var reason = (PxrSpatialMapSizeLimitedReason)BitConverter.ToInt32(eventDB.data, 0);
+                        SpatialMapSizeLimited(reason);
+                    }
+                }
+                    break;
             }
         }
 
@@ -663,24 +667,36 @@ namespace Unity.XR.PXR
                 {
                     case MeshChangeState.Added:
                     case MeshChangeState.Updated:
-                        {
-                            PXR_Plugin.MixedReality.UPxr_AddOrUpdateMesh(meshInfos[i]);
-                        }
+                    {
+                        PXR_Plugin.MixedReality.UPxr_AddOrUpdateMesh(meshInfos[i]);
+                    }
                         break;
                     case MeshChangeState.Removed:
-                        {
-                            PXR_Plugin.MixedReality.UPxr_RemoveMesh(meshInfos[i].uuid);
-                        }
+                    {
+                        PXR_Plugin.MixedReality.UPxr_RemoveMesh(meshInfos[i].uuid);
+                    }
                         break;
                     case MeshChangeState.Unchanged:
-                        {
-                            break;
-                        }
+                    {
+                        break;
+                    }
                 }
             }
             if (result == PxrResult.SUCCESS)
             {
                 SpatialMeshDataUpdated?.Invoke(meshInfos);
+            }
+        }
+        
+        private IEnumerator QueryPlaneAnchor()
+        {
+            var task = PXR_MixedReality.QueryPlaneAnchorAsync();
+            yield return new WaitUntil(() => task.IsCompleted);
+            
+            var (result, meshInfos) = task.Result;
+            if (result == PxrResult.SUCCESS)
+            {
+                PlaneDetectionDataUpdated?.Invoke(meshInfos);
             }
         }
 
@@ -721,10 +737,6 @@ namespace Unity.XR.PXR
             StopAllCoroutines();
             if (openMRC)
             {
-                if (GraphicsDeviceType.Vulkan == SystemInfo.graphicsDeviceType)
-                {
-                    PXR_Plugin.Sensor.UPxr_HMDUpdateSwitch(true);
-                }
 #if UNITY_6000_0_OR_NEWER
                 if (GraphicsSettings.defaultRenderPipeline != null)
 #else
@@ -805,10 +817,9 @@ namespace Unity.XR.PXR
             if (!initMRCSucceed)
             {
                 layerParam.layerId = LAYER_MRC;
-                layerParam.layerShape = PXR_OverLay.OverlayShape.Quad;
-                layerParam.layerType = PXR_OverLay.OverlayType.Overlay;
-                layerParam.layerLayout = PXR_OverLay.LayerLayout.Stereo;
-                layerParam.format = (UInt64)RenderTextureFormat.Default;
+                layerParam.layerShape = PXR_CompositionLayer.OverlayShape.Quad;
+                layerParam.layerType = PXR_CompositionLayer.OverlayType.Overlay;
+                layerParam.layerLayout = PXR_CompositionLayer.LayerLayout.Stereo;
                 layerParam.width = (uint)cameraInfo.width;
                 layerParam.height = (uint)cameraInfo.height;
                 layerParam.sampleCount = 1;
@@ -816,6 +827,26 @@ namespace Unity.XR.PXR
                 layerParam.arraySize = 1;
                 layerParam.mipmapCount = 0;
                 layerParam.layerFlags = 0;
+
+                if (textureM == null)
+                    textureM = new Material(Shader.Find("PXR_SDK/PXR_Texture2DBlit"));
+
+                if (GraphicsDeviceType.Vulkan == SystemInfo.graphicsDeviceType)
+                {
+                    if (ColorSpace.Linear == QualitySettings.activeColorSpace)
+                    {
+                        layerParam.format = (UInt64)PXR_CompositionLayer.ColorForamt.VK_FORMAT_R8G8B8A8_SRGB;
+                    }
+                    else
+                    {
+                        layerParam.format = (UInt64)PXR_CompositionLayer.ColorForamt.VK_FORMAT_R8G8B8A8_UNORM;
+                        textureM.SetFloat("_Gamma", 2.2f);
+                    }
+                }
+                else
+                {
+                    layerParam.format = (UInt64)PXR_CompositionLayer.ColorForamt.GL_SRGB8_ALPHA8;
+                }
                 PXR_Plugin.Render.UPxr_CreateLayerParam(layerParam);
 
                 initMRCSucceed = true;
@@ -871,73 +902,72 @@ namespace Unity.XR.PXR
             PLog.d(TAG_MRC, $"CopyAndSubmitMRCLayer. initMRCSucceed={initMRCSucceed}, createMRCOverlaySucceed={createMRCOverlaySucceed}");
             if (!initMRCSucceed || !createMRCOverlaySucceed) return;
 
-            if (GraphicsDeviceType.Vulkan == SystemInfo.graphicsDeviceType)
-            {
-                PXR_Plugin.Render.UPxr_GetLayerNextImageIndex(LAYER_MRC, ref imageIndex);
-            }
-            else
-            {
-
-                PXR_Plugin.Render.UPxr_GetLayerNextImageIndexByRender(LAYER_MRC, ref imageIndex);
-            }
+            PXR_Plugin.Render.UPxr_GetLayerNextImageIndexByRender(LAYER_MRC, ref imageIndex);
 
             for (int eyeId = 0; eyeId < 2; ++eyeId)
             {
-                Texture dstT = layerTexturesInfo[eyeId].swapChain[imageIndex];
+                Texture nativeTexture = layerTexturesInfo[eyeId].swapChain[imageIndex];
 
-                if (dstT == null)
+                RenderTexture texture = (0 == eyeId) ? mrcBackgroundRT : mrcForegroundRT;
+
+                if ((GraphicsDeviceType.Vulkan == SystemInfo.graphicsDeviceType && QualitySettings.activeColorSpace == ColorSpace.Gamma))
                 {
-                    PLog.e(TAG_MRC, "dstT is null, eyeId:" + eyeId);
-                    continue;
-                }
+                    RenderTextureDescriptor rtDes = new RenderTextureDescriptor((int)cameraInfo.width, (int)cameraInfo.height, RenderTextureFormat.ARGB32, 0);
+                    rtDes.msaaSamples = 1;
+                    rtDes.useMipMap = true;
+                    rtDes.autoGenerateMips = false;
+                    rtDes.sRGB = true;
 
-                RenderTexture rt = (0 == eyeId) ? mrcBackgroundRT : mrcForegroundRT;
+                    RenderTexture renderTexture = RenderTexture.GetTemporary(rtDes);
 
-                RenderTexture tempRT = null;
-
-                if (!(QualitySettings.activeColorSpace == ColorSpace.Gamma && rt != null && rt.format == RenderTextureFormat.ARGB32))
-                {
-                    RenderTextureDescriptor descriptor = new RenderTextureDescriptor((int)cameraInfo.width, (int)cameraInfo.height, RenderTextureFormat.ARGB32, 0); descriptor.msaaSamples = 1;
-                    descriptor.useMipMap = false;
-                    descriptor.autoGenerateMips = false;
-                    descriptor.sRGB = false;
-                    tempRT = RenderTexture.GetTemporary(descriptor);
-
-                    if (!tempRT.IsCreated())
+                    if (!renderTexture.IsCreated())
                     {
-                        tempRT.Create();
+                        renderTexture.Create();
                     }
-                    rt.DiscardContents();
-                    tempRT.DiscardContents();
+                    renderTexture.DiscardContents();
 
-                    Graphics.Blit(rt, tempRT);
-                    Graphics.CopyTexture(tempRT, 0, 0, dstT, 0, 0);
+                    if (textureM == null)
+                    {
+                        textureM = new Material(Shader.Find("PXR_SDK/PXR_Texture2DBlit"));
+
+                        if (GraphicsDeviceType.Vulkan == SystemInfo.graphicsDeviceType)
+                        {
+                            if (ColorSpace.Gamma == QualitySettings.activeColorSpace)
+                            {
+                                textureM.SetFloat("_Gamma", 2.2f);
+                            }
+                        }
+                    }
+                    textureM.mainTexture = texture;
+                    textureM.SetPass(0);
+                    Graphics.Blit(texture, renderTexture, textureM);
+                    Graphics.CopyTexture(renderTexture, 0, 0, nativeTexture, 0, 0);
+                    RenderTexture.ReleaseTemporary(renderTexture);
                 }
                 else
                 {
-                    Graphics.CopyTexture(rt, 0, 0, dstT, 0, 0);
-                }
-
-                if (tempRT != null)
-                {
-                    RenderTexture.ReleaseTemporary(tempRT);
+                    Graphics.CopyTexture(texture, 0, 0, nativeTexture, 0, 0);
                 }
             }
 
-            PxrLayerQuad layerSubmit = new PxrLayerQuad();
+            PxrLayerQuad2 layerSubmit = new PxrLayerQuad2();
             layerSubmit.header.layerId = LAYER_MRC;
+            layerSubmit.header.layerShape = PXR_CompositionLayer.OverlayShape.Quad;
             layerSubmit.header.layerFlags = (UInt32)PxrLayerSubmitFlags.PxrLayerFlagMRCComposition;
-            layerSubmit.width = 1.0f;
-            layerSubmit.height = 1.0f;
             layerSubmit.header.colorScaleX = 1.0f;
             layerSubmit.header.colorScaleY = 1.0f;
             layerSubmit.header.colorScaleZ = 1.0f;
             layerSubmit.header.colorScaleW = 1.0f;
-            layerSubmit.pose.orientation.w = 1.0f;
             layerSubmit.header.headPose.orientation.x = 0;
             layerSubmit.header.headPose.orientation.y = 0;
             layerSubmit.header.headPose.orientation.z = 0;
             layerSubmit.header.headPose.orientation.w = 1;
+            layerSubmit.poseLeft.orientation.w = 1.0f;
+            layerSubmit.poseRight.orientation.w = 1.0f;
+            layerSubmit.sizeLeft.x = 1;
+            layerSubmit.sizeLeft.y = 1;
+            layerSubmit.sizeRight.x = 1;
+            layerSubmit.sizeRight.y = 1;
 
             if (layerSubmitPtr != IntPtr.Zero)
             {
@@ -946,7 +976,7 @@ namespace Unity.XR.PXR
             }
             layerSubmitPtr = Marshal.AllocHGlobal(Marshal.SizeOf(layerSubmit));
             Marshal.StructureToPtr(layerSubmit, layerSubmitPtr, false);
-            PXR_Plugin.Render.UPxr_SubmitLayerQuadByRender(layerSubmitPtr);
+            PXR_Plugin.Render.UPxr_SubmitLayerQuad2ByRender(layerSubmitPtr);
         }
 
         private void UpdateMRCCam()
@@ -1019,6 +1049,7 @@ namespace Unity.XR.PXR
                 backgroundCamObj = new GameObject("myBackgroundCamera");
                 backgroundCamObj.transform.parent = Camera.main.transform.parent;
                 backgroundCamObj.AddComponent<Camera>();
+                backgroundCamObj.tag = "myBackgroundCamera";
                 PLog.i(TAG_MRC, "create background camera object.");
             }
             InitMRCCam(backgroundCamObj.GetComponent<Camera>(), false);
@@ -1029,6 +1060,7 @@ namespace Unity.XR.PXR
                 foregroundCamObj = new GameObject("myForegroundCamera");
                 foregroundCamObj.transform.parent = Camera.main.transform.parent;
                 foregroundCamObj.AddComponent<Camera>();
+                foregroundCamObj.tag = "myForegroundCamera";
                 PLog.i(TAG_MRC, "create foreground camera object.");
             }
             InitMRCCam(foregroundCamObj.GetComponent<Camera>(), true);
@@ -1108,10 +1140,10 @@ namespace Unity.XR.PXR
         {
             if (!PXR_Plugin.System.UPxr_GetMRCEnable() || null == backgroundCamObj || null == foregroundCamObj) return;
 
-            PxrPosef pose = new PxrPosef();
             PxrTrackingOrigin mode = new PxrTrackingOrigin();
             PXR_Plugin.System.UPxr_GetTrackingOrigin(ref mode);
-            PXR_Plugin.System.UPxr_GetExternalCameraPose(mode, ref pose);
+            PxrPosef pose;
+            PXR_Plugin.System.UPxr_GetExternalCameraPose(mode, out pose);
 
             backgroundCamObj.transform.localPosition = new Vector3(pose.position.x, pose.position.y, (-pose.position.z) * 1f);
             foregroundCamObj.transform.localPosition = new Vector3(pose.position.x, pose.position.y, (-pose.position.z) * 1f);
@@ -1122,6 +1154,9 @@ namespace Unity.XR.PXR
 
             PLog.d(TAG_MRC, $"CalibrationMRCCam backgroundCamObj.transform.localPosition={ backgroundCamObj.transform.localPosition}");
         }
+        
         #endregion
+        
+       
     }
 }

@@ -66,8 +66,17 @@ namespace Robot
         private readonly object _controllerInputLock = new object();
         private ControllerInputState _cachedLeftControllerInput;
         private ControllerInputState _cachedRightControllerInput;
+        private bool _controllerInputStateLogged;
+        private bool _lastLoggedLeftPrimaryButton;
+        private bool _lastLoggedLeftSecondaryButton;
+        private bool _lastLoggedRightPrimaryButton;
+        private bool _lastLoggedRightSecondaryButton;
         private long _lastDirectTrackingHeadSampleSeq;
         private long _lastDirectTrackingControllerSampleSeq;
+        // Legacy and enterprise-direct paths are encoders for the same TCP sink. Sharing a
+        // cursor prevents duplicate callbacks when the tracking source changes at runtime.
+        private readonly ArucoMarkerTelemetry.ConsumerCursor _tcpArucoMarkerCursor =
+            ArucoMarkerTelemetry.CreateConsumerCursor("tcp_tracking");
         private long _lastSentLeftTobImuTimestampNs = long.MinValue;
         private long _lastSentRightTobImuTimestampNs = long.MinValue;
         private float _lastHeardSend = 0;
@@ -324,6 +333,7 @@ namespace Robot
             _cachedActiveInputDevice = (int)PXR_HandTracking.GetActiveInputDevice();
             ControllerInputState leftInput = ReadControllerInput(XRNode.LeftHand);
             ControllerInputState rightInput = ReadControllerInput(XRNode.RightHand);
+            LogControllerInputStateIfNeeded(leftInput, rightInput);
             lock (_controllerInputLock)
             {
                 _cachedLeftControllerInput = leftInput;
@@ -334,7 +344,7 @@ namespace Robot
             {
                 if (_sendTrackingMsg.Count < 2)
                 {
-                    _trackingData.Get(ref _trackingJsonData);
+                    _trackingData.Get(ref _trackingJsonData, _tcpArucoMarkerCursor);
                     _sendTrackingMsg.Enqueue(_trackingJsonData.ToJson());
                 }
             }
@@ -496,6 +506,12 @@ namespace Robot
                 Interlocked.Increment(ref _directNewSampleCount);
 
                 JsonData trackingValue = new JsonData();
+                trackingValue["sdk_release"] = PXR_Constants.SDKVersion;
+                trackingValue["sdk_package_version"] =
+                    "com.unity.xr.picoxr@" + PXR_Constants.SDKVersion;
+                TrackingOriginTelemetry.AppendTo(trackingValue);
+                LargeSpaceTelemetry.AppendTo(trackingValue);
+                ArucoMarkerTelemetry.AppendTo(trackingValue, _tcpArucoMarkerCursor);
                 if (TrackingData.HeadOn && hasHeadPose)
                 {
                     JsonData head = new JsonData();
@@ -503,18 +519,27 @@ namespace Robot
                     head["status"] = headPose.Status;
                     head["timeStampNs"] = headPose.TimeStampNs;
                     head["poseTimeStampNs"] = headPose.TimeStampNs;
+                    head["poseError"] = headPose.PoseError;
+                    head["poseSource"] = headPose.PoseSource;
+                    EnterpriseCollectionRecorder.AppendNativePosePair(
+                        head,
+                        headPose.NativePosePair);
                     EnterpriseCollectionRecorder.AppendNativeKinematics(head, headPose.NativeKinematics);
+                    EnterpriseCollectionRecorder.AppendOfficialHeadTelemetry(
+                        head,
+                        headPose.OfficialTelemetry);
                     trackingValue["Head"] = head;
                 }
 
                 if (TrackingData.ControllerOn)
                 {
                     GetControllerInputSnapshot(out ControllerInputState leftInput, out ControllerInputState rightInput);
-                    if (!IsControllerActiveInput())
-                    {
-                        leftInput = default(ControllerInputState);
-                        rightInput = default(ControllerInputState);
-                    }
+                    // Recording controls must remain available even when PICO reports HeadActive
+                    // or HandTrackingActive. SDK 3.4 can switch the active pose source away from
+                    // controllers while the physical controller buttons are still connected and
+                    // readable; clearing the snapshot here silently removed Y/X press edges and
+                    // made it impossible to start, stop, or delete an episode. Keep pose gating
+                    // above, but treat controller input as an independent control-plane channel.
                     JsonData controller = BuildEnterpriseControllerJson(
                         leftController,
                         rightController,
@@ -598,6 +623,7 @@ namespace Robot
             json["poseTimeStampNs"] = pose.TimeStampNs;
             json["type"] = (double)pose.Type;
             json["poseError"] = (double)pose.PoseError;
+            EnterpriseCollectionRecorder.AppendNativePosePair(json, pose.NativePosePair);
             EnterpriseCollectionRecorder.AppendNativeKinematics(json, pose.NativeKinematics);
             if (ShouldSendTobControllerImu(pose.TobControllerImu, isLeft))
             {
@@ -648,6 +674,21 @@ namespace Robot
             bool primaryButtonValid = device.TryGetFeatureValue(CommonUsages.primaryButton, out bool primaryButton);
             bool secondaryButtonValid = device.TryGetFeatureValue(CommonUsages.secondaryButton, out bool secondaryButton);
             bool menuButtonValid = device.TryGetFeatureValue(CommonUsages.menuButton, out bool menuButton);
+
+            // PICO OS exposes the physical controller face buttons as a standard Android
+            // gamepad even when SDK 3.4 reports HeadActive/HandTrackingActive and Unity XR
+            // consequently returns an invalid XRNode device. Preserve the XR values when
+            // available and OR in the platform buttons so recording controls remain usable.
+            bool legacyButtonsAvailable = Application.platform == RuntimePlatform.Android;
+            if (legacyButtonsAvailable)
+            {
+                bool isLeft = node == XRNode.LeftHand;
+                KeyCode primaryKey = isLeft ? KeyCode.JoystickButton2 : KeyCode.JoystickButton0;
+                KeyCode secondaryKey = isLeft ? KeyCode.JoystickButton3 : KeyCode.JoystickButton1;
+                primaryButton |= Input.GetKey(primaryKey);
+                secondaryButton |= Input.GetKey(secondaryKey);
+            }
+
             return new ControllerInputState
             {
                 DeviceValid = device.isValid,
@@ -663,10 +704,34 @@ namespace Robot
                 AxisClickValid = device.isValid && axisClickValid,
                 GripValid = device.isValid && gripValid,
                 TriggerValid = device.isValid && triggerValid,
-                PrimaryButtonValid = device.isValid && primaryButtonValid,
-                SecondaryButtonValid = device.isValid && secondaryButtonValid,
+                PrimaryButtonValid = (device.isValid && primaryButtonValid) || legacyButtonsAvailable,
+                SecondaryButtonValid = (device.isValid && secondaryButtonValid) || legacyButtonsAvailable,
                 MenuButtonValid = device.isValid && menuButtonValid
             };
+        }
+
+        private void LogControllerInputStateIfNeeded(
+            ControllerInputState left,
+            ControllerInputState right)
+        {
+            bool buttonChanged = _controllerInputStateLogged &&
+                (left.PrimaryButton != _lastLoggedLeftPrimaryButton ||
+                 left.SecondaryButton != _lastLoggedLeftSecondaryButton ||
+                 right.PrimaryButton != _lastLoggedRightPrimaryButton ||
+                 right.SecondaryButton != _lastLoggedRightSecondaryButton);
+            if (!_controllerInputStateLogged || buttonChanged)
+            {
+                Debug.Log(
+                    $"{Tag}controller input " +
+                    $"leftValid={left.DeviceValid} leftX={left.PrimaryButton} leftY={left.SecondaryButton} " +
+                    $"rightValid={right.DeviceValid} rightA={right.PrimaryButton} rightB={right.SecondaryButton}");
+            }
+
+            _controllerInputStateLogged = true;
+            _lastLoggedLeftPrimaryButton = left.PrimaryButton;
+            _lastLoggedLeftSecondaryButton = left.SecondaryButton;
+            _lastLoggedRightPrimaryButton = right.PrimaryButton;
+            _lastLoggedRightSecondaryButton = right.SecondaryButton;
         }
 
         private void GetControllerInputSnapshot(
@@ -762,6 +827,8 @@ namespace Robot
         {
             _lastDirectTrackingHeadSampleSeq = 0;
             _lastDirectTrackingControllerSampleSeq = 0;
+            // Keep the ArUco cursor across TCP reconnects. Resetting it replayed the bounded
+            // callback history and produced duplicate marker events after every reconnect.
         }
 
         private static int GetClampedSleepMs(int sleepMs)

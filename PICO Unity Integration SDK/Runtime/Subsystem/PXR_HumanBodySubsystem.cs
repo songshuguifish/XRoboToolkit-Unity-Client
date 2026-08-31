@@ -3,7 +3,9 @@ using Unity.Collections;
 using Unity.XR.PXR;
 using UnityEngine;
 using UnityEngine.XR.ARSubsystems;
-
+#if PICO_OPENXR_SDK
+using Unity.XR.OpenXR.Features.PICOSupport;
+#endif
 public class PXR_HumanBodySubsystem : XRHumanBodySubsystem
 {
     internal const string k_SubsystemId = "PXR_HumanBodySubsystem";
@@ -15,7 +17,8 @@ public class PXR_HumanBodySubsystem : XRHumanBodySubsystem
 
         private BodyTrackingGetDataInfo bdi = new BodyTrackingGetDataInfo();
         private BodyTrackingData bd = new BodyTrackingData();
-
+        BodyTrackingStatus bs = new BodyTrackingStatus();
+        bool istracking = false;
         public override void Start()
         {
             PLog.i(k_SubsystemId, "Start");
@@ -25,7 +28,11 @@ public class PXR_HumanBodySubsystem : XRHumanBodySubsystem
         public override void Stop()
         {
             PLog.i(k_SubsystemId, "Stop");
-            int ret = PXR_MotionTracking.StopBodyTracking();
+#if PICO_OPENXR_SDK
+            int ret = BodyTrackingFeature.StopBodyTracking();
+#else
+        int ret = PXR_MotionTracking.StopBodyTracking();
+#endif
         }
 
         public override void Destroy()
@@ -39,69 +46,86 @@ public class PXR_HumanBodySubsystem : XRHumanBodySubsystem
 #if UNITY_ANDROID
             if (isBodyTrackingSupported)
             {
-                // Get the current tracking mode, either bodytracking or motiontracking.
-                MotionTrackerMode trackingMode = PXR_MotionTracking.GetMotionTrackerMode();
+                // Get the position and orientation data of each body node.
+#if PICO_OPENXR_SDK
+                BodyTrackingFeature.GetBodyTrackingState(ref istracking, ref bs);
+#else
+                PXR_MotionTracking.GetBodyTrackingState(ref istracking, ref bs);
+#endif
+                // Debug.Log($"GetBodyTrackingState stateCode  = {bs.stateCode}  message  = {bs.message} ");
+                // If not calibrated, invoked system motion tracker app for calibration.
 
-                // Update bodytracking pose.
-                if (trackingMode == MotionTrackerMode.BodyTracking)
+
+                // If not calibrated, invoked system motion tracker app for calibration.
+                if (bs.stateCode!=BodyTrackingStatusCode.BT_VALID)
                 {
-                    // Get the position and orientation data of each body node.
-                    int ret = PXR_MotionTracking.GetBodyTrackingData(ref bdi, ref bd);
+                    return;
+                }
 
-                    // if the return is successful
-                    if (ret == 0)
+                int ret = -1;
+
+#if PICO_OPENXR_SDK
+                ret = BodyTrackingFeature.GetBodyTrackingData(ref bdi, ref bd);
+#else
+                ret = PXR_MotionTracking.GetBodyTrackingData(ref bdi, ref bd);
+#endif
+
+                // if the return is successful
+                if (ret == 0)
+                {
+                    skeleton = new NativeArray<XRHumanBodyJoint>((int)BodyTrackerRole.ROLE_NUM, allocator);
+                    for (int i = 0; i < (int)BodyTrackerRole.ROLE_NUM; i++)
                     {
-                        skeleton = new NativeArray<XRHumanBodyJoint>((int)BodyTrackerRole.ROLE_NUM, allocator);
-                        for (int i = 0; i < (int)BodyTrackerRole.ROLE_NUM; i++)
-                        {
-                            BodyTrackerTransPose localPose = bd.roleDatas[i].localPose;
-                            Vector3 pos = new Vector3((float)bd.roleDatas[i].localPose.PosX, (float)bd.roleDatas[i].localPose.PosY, (float)bd.roleDatas[i].localPose.PosZ);
-                            Quaternion qu = new Quaternion((float)bd.roleDatas[i].localPose.RotQx, (float)bd.roleDatas[i].localPose.RotQy, (float)bd.roleDatas[i].localPose.RotQz, (float)bd.roleDatas[i].localPose.RotQw);
+                        BodyTrackerTransPose localPose = bd.roleDatas[i].localPose;
+                        Vector3 pos = new Vector3((float)bd.roleDatas[i].localPose.PosX, (float)bd.roleDatas[i].localPose.PosY,
+                            (float)bd.roleDatas[i].localPose.PosZ);
+                        Quaternion qu = new Quaternion((float)bd.roleDatas[i].localPose.RotQx, (float)bd.roleDatas[i].localPose.RotQy,
+                            (float)bd.roleDatas[i].localPose.RotQz, (float)bd.roleDatas[i].localPose.RotQw);
 
-                            if (i == 0)
-                            {
-                                qu *= Quaternion.Euler(new Vector3(0, 180, 0));
-                            }
-                            else if (i == 1)
-                            {
-                                qu *= Quaternion.Euler(new Vector3(0, 0, -95));
-                            }
-                            else if (i == 2)
-                            {
-                                qu *= Quaternion.Euler(new Vector3(0, 0, 95));
-                            }
-                            else if (i == 4)
-                            {
-                                qu *= Quaternion.Euler(new Vector3(0, 0, -90));
-                            }
-                            else if (i == 3 || i == 5 || i == 12)
-                            {
-                                qu *= Quaternion.Euler(new Vector3(0, 0, 90));
-                            }
-                            else if (i == 7)
-                            {
-                                qu *= Quaternion.Euler(new Vector3(180, -90, 0));
-                            }
-                            else if (i == 6 || i == 9 || i == 15)
-                            {
-                                qu *= Quaternion.Euler(new Vector3(0, 90, 90));
-                            }
-                            else if (i == 8 || i == 10 || i == 11)
-                            {
-                                qu *= Quaternion.Euler(new Vector3(0, 90, 0));
-                            }
-                            else if (i == 13 || i == 14 || i == 16 || i == 17 || i == 18 || i == 19 || i == 20)
-                            {
-                                qu *= Quaternion.Euler(new Vector3(0, 0, 180));
-                            }
-                            else if (i == 21)
-                            {
-                                qu *= Quaternion.Euler(new Vector3(180, 0, 180));
-                            }
-                            Pose pose = new Pose(pos, qu);
-                            XRHumanBodyJoint mXRHumanBodyJoint = new XRHumanBodyJoint(i, 0, Vector3.one, pose, Vector3.one, pose, true);
-                            skeleton[i] = mXRHumanBodyJoint;
+                        if (i == 0)
+                        {
+                            qu *= Quaternion.Euler(new Vector3(0, 180, 0));
                         }
+                        else if (i == 1)
+                        {
+                            qu *= Quaternion.Euler(new Vector3(0, 0, -95));
+                        }
+                        else if (i == 2)
+                        {
+                            qu *= Quaternion.Euler(new Vector3(0, 0, 95));
+                        }
+                        else if (i == 4)
+                        {
+                            qu *= Quaternion.Euler(new Vector3(0, 0, -90));
+                        }
+                        else if (i == 3 || i == 5 || i == 12)
+                        {
+                            qu *= Quaternion.Euler(new Vector3(0, 0, 90));
+                        }
+                        else if (i == 7)
+                        {
+                            qu *= Quaternion.Euler(new Vector3(180, -90, 0));
+                        }
+                        else if (i == 6 || i == 9 || i == 15)
+                        {
+                            qu *= Quaternion.Euler(new Vector3(0, 90, 90));
+                        }
+                        else if (i == 8 || i == 10 || i == 11)
+                        {
+                            qu *= Quaternion.Euler(new Vector3(0, 90, 0));
+                        }
+                        else if (i == 13 || i == 14 || i == 16 || i == 17 || i == 18 || i == 19 || i == 20)
+                        {
+                            qu *= Quaternion.Euler(new Vector3(0, 0, 180));
+                        }
+                        else if (i == 21)
+                        {
+                            qu *= Quaternion.Euler(new Vector3(180, 0, 180));
+                        }
+
+                        Pose pose = new Pose(pos, qu);
+                        XRHumanBodyJoint mXRHumanBodyJoint = new XRHumanBodyJoint(i, 0, Vector3.one, pose, Vector3.one, pose, true);
+                        skeleton[i] = mXRHumanBodyJoint;
                     }
                 }
             }
@@ -118,24 +142,42 @@ public class PXR_HumanBodySubsystem : XRHumanBodySubsystem
                     PXR_Plugin.MotionTracking.UPxr_WantBodyTrackingService();
 
                     // Query whether the current device supports human body tracking.
+#if PICO_OPENXR_SDK
+                    isBodyTrackingSupported = BodyTrackingFeature.IsBodyTrackingSupported();
+#else
                     PXR_MotionTracking.GetBodyTrackingSupported(ref isBodyTrackingSupported);
-
+#endif
                     if (isBodyTrackingSupported)
                     {
                         BodyTrackingBoneLength bones = new BodyTrackingBoneLength();
-
+                        
+#if PICO_OPENXR_SDK
                         // Start BodyTracking
-                        PXR_MotionTracking.StartBodyTracking(BodyTrackingMode.BTM_FULL_BODY_HIGH, bones);
-
+                        BodyTrackingFeature.StartBodyTracking(BodyJointSet.BODY_JOINT_SET_BODY_FULL_START, bones);
                         // Has Pico motion tracker completed calibration (0: not completed; 1: completed)?
-                        int calibrated = 0;
-                        PXR_Input.GetMotionTrackerCalibState(ref calibrated);
-
+                        BodyTrackingFeature.GetBodyTrackingState(ref istracking, ref bs);
+#else 
+                        // Start BodyTracking
+                        PXR_MotionTracking.StartBodyTracking(BodyJointSet.BODY_JOINT_SET_BODY_FULL_START, bones);
+                        // Has Pico motion tracker completed calibration (0: not completed; 1: completed)?
+                        PXR_MotionTracking.GetBodyTrackingState(ref istracking, ref bs);
+#endif
+                        // Debug.Log($"GetBodyTrackingState stateCode  = {bs.stateCode}  message  = {bs.message} ");
                         // If not calibrated, invoked system motion tracker app for calibration.
-                        if (calibrated == 0)
+                        
+                        if (bs.stateCode!=BodyTrackingStatusCode.BT_VALID)
                         {
-                            PXR_MotionTracking.StartMotionTrackerCalibApp();
+                            if (bs.message==BodyTrackingMessage.BT_MESSAGE_TRACKER_NOT_CALIBRATED||bs.message==BodyTrackingMessage.BT_MESSAGE_UNKNOWN)
+                            {
+#if PICO_OPENXR_SDK
+                                BodyTrackingFeature.StartMotionTrackerCalibApp();
+#else
+                                PXR_MotionTracking.StartMotionTrackerCalibApp();
+#endif
+                            }
                         }
+                        // If not calibrated, invoked system motion tracker app for calibration.
+                       
                     }
                 }
                 init = false;

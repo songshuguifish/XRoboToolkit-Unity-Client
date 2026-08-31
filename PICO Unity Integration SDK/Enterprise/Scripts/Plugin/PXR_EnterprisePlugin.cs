@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/*******************************************************************************
+﻿/*******************************************************************************
 Copyright © 2015-2022 PICO Technology Co., Ltd.All rights reserved.  
 
 NOTICE：All information contained herein is, and remains the property of 
@@ -15,27 +15,20 @@ PICO Technology Co., Ltd.
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using LitJson;
-#if PICO_XR
 using Unity.XR.PXR;
-#else
-using Unity.XR.OpenXR.Features.PICOSupport;
-#endif
 using UnityEngine;
 using UnityEngine.XR;
+using KeyValuePair = Unity.XR.PICO.TOBSupport.KeyValuePair;
 
 namespace Unity.XR.PICO.TOBSupport
 {
     public partial class PXR_EnterprisePlugin
     {
         private const string TAG = "[PXR_EnterprisePlugin]";
-        // UPxr_GetControllerTrackingState reports controller linear derivatives with
-        // millimetre-based length units. PoseInfo is the application SI boundary.
-        private const float RuntimeControllerLinearNativeToSi = 0.001f;
         public const int MAX_SIZE = 12208032;
 
         public static string token;
@@ -67,21 +60,7 @@ namespace Unity.XR.PICO.TOBSupport
         [DllImport("libpxr_xrsdk_native", CallingConvention = CallingConvention.Cdecl)]
         public static extern int getCameraParameters(string token, out RGBCameraParams rgb_Camera_Params);
 
-#if PICO_XR
-        [DllImport("pxr_api", CallingConvention = CallingConvention.Cdecl)]
-#else
-        [DllImport("openxr_pico", EntryPoint = "PICO_GetPredictedDisplayTime",
-            CallingConvention = CallingConvention.Cdecl)]
-#endif
-        public static extern int Pxr_GetPredictedDisplayTime(ref double predictedDisplayTime);
         
-#if PICO_XR
-         [DllImport("pxr_api", CallingConvention = CallingConvention.Cdecl)]
-#else
-        [DllImport("openxr_pico", EntryPoint = "PICO_GetPredictedMainSensorState2",
-            CallingConvention = CallingConvention.Cdecl)]
-#endif
-        public static extern int Pxr_GetPredictedMainSensorState2(double predictTimeMs, ref PxrSensorState2 sensorState, ref int sensorFrameIndex);
 
 #if PICO_PLATFORM
             private static AndroidJavaClass unityPlayer;
@@ -108,7 +87,7 @@ namespace Unity.XR.PICO.TOBSupport
         public static bool UPxr_InitEnterpriseService(bool isCamera=false)
         {
 #if PICO_PLATFORM
-                tobHelperClass = new AndroidJavaClass("com.pvr.tobservice.ToBServiceHelper");
+                tobHelperClass = new AndroidJavaClass("com.picoxr.tobservice.ToBServiceUtils");
                 tobHelper = tobHelperClass.CallStatic<AndroidJavaObject>("getInstance");
                 unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer");
                 currentActivity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity");
@@ -136,7 +115,7 @@ namespace Unity.XR.PICO.TOBSupport
         public static void UPxr_UnBindEnterpriseService()
         {
 #if PICO_PLATFORM
-                tobHelper.Call("unBindTobService", currentActivity);
+                tobHelper.Call("unBindTobService");
 #endif
         }
 
@@ -249,189 +228,6 @@ namespace Unity.XR.PICO.TOBSupport
             }
             IToBService.Call("pbsSwitchSetUsbConfigurationOption", GetEnumType(uSBConfigModeEnum), ext);
 #endif
-        }
-
-        public static int UPxr_SetTrackingDataIncludingPredictions(bool enabled, int ext)
-        {
-#if PICO_PLATFORM
-            if (IToBService == null)
-            {
-                Debug.LogWarning("TOB service binder is not ready; cannot configure predicted tracking data.");
-                return -1;
-            }
-
-            try
-            {
-                return IToBService.Call<int>(
-                    "pbsSetTrackingDataIncludingPredictions", enabled ? 1 : 0, ext);
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"pbsSetTrackingDataIncludingPredictions failed: {e}");
-                return -1;
-            }
-#else
-            return -1;
-#endif
-        }
-
-        public static int UPxr_GetTrackingDataIncludingPredictions(int ext)
-        {
-#if PICO_PLATFORM
-            if (IToBService == null)
-            {
-                Debug.LogWarning("TOB service binder is not ready; cannot query predicted tracking data.");
-                return -1;
-            }
-
-            try
-            {
-                return IToBService.Call<int>("pbsGetTrackingDataIncludingPredictions", ext);
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"pbsGetTrackingDataIncludingPredictions failed: {e}");
-                return -1;
-            }
-#else
-            return -1;
-#endif
-        }
-
-        public static int UPxr_SetUsbTetheringStaticIP(string localAddr, string clientAddr)
-        {
-            int resultCode = 1;
-#if PICO_PLATFORM
-            if (IToBService == null)
-            {
-                Debug.LogWarning("TOB service binder is not ready; cannot set USB tethering static IP.");
-                return resultCode;
-            }
-
-            try
-            {
-                resultCode = IToBService.Call<int>(
-                    "setUsbTetheringStaticIP", localAddr, clientAddr);
-                Debug.Log($"USB tethering static IP set path=direct result={resultCode}");
-                return resultCode;
-            }
-            catch (Exception directException)
-            {
-                Debug.LogWarning(
-                    $"USB tethering static IP direct set unavailable; using fallback: {directException.Message}");
-            }
-
-            try
-            {
-                using (AndroidJavaObject parameters = new AndroidJavaObject("android.os.Bundle"))
-                {
-                    parameters.Call("putString", "local_addr", localAddr);
-                    parameters.Call("putString", "client_addr", clientAddr);
-                    using (AndroidJavaObject result = IToBService.Call<AndroidJavaObject>(
-                               "pbsCommonMessageLocked", "set_usb_tethering_static_ip", parameters))
-                    {
-                        if (result != null)
-                        {
-                            resultCode = result.Call<int>("getInt", "key_result_code", 1);
-                        }
-                    }
-                }
-                Debug.Log($"USB tethering static IP set path=pbsCommonMessageLocked result={resultCode}");
-            }
-            catch (Exception fallbackException)
-            {
-                Debug.LogError($"SetUsbTetheringStaticIP fallback failed: {fallbackException}");
-            }
-#endif
-            return resultCode;
-        }
-
-        public static string UPxr_GetUsbTetheringStaticIPLocal()
-        {
-            return UPxr_GetUsbTetheringStaticIPAddress(
-                "getUsbTetheringStaticIPLocal", "get_usb_tethering_static_ip_local", "local_addr");
-        }
-
-        public static string UPxr_GetUsbTetheringStaticIPClient()
-        {
-            return UPxr_GetUsbTetheringStaticIPAddress(
-                "getUsbTetheringStaticIPClient", "get_usb_tethering_static_ip_client", "client_addr");
-        }
-
-        public static void UPxr_EnableUsbTetheringStaticIP()
-        {
-#if PICO_PLATFORM
-            if (IToBService == null)
-            {
-                Debug.LogWarning("TOB service binder is not ready; cannot enable USB tethering static IP.");
-                return;
-            }
-
-            try
-            {
-                using (AndroidJavaObject parameters = new AndroidJavaObject("android.os.Bundle"))
-                {
-                    // PICO 4 Ultra ToBService 4.3.32 identifies this switch as enum index 104.
-                    parameters.Call("putInt", "system_function", 104);
-                    parameters.Call("putInt", "switch", 0);
-                    parameters.Call("putInt", "extension_bit", 0);
-                    using (AndroidJavaObject ignored = IToBService.Call<AndroidJavaObject>(
-                               "pbsCommonMessageLocked", "switch_system_function", parameters))
-                    {
-                    }
-                }
-            }
-            catch (Exception exception)
-            {
-                Debug.LogError($"EnableUsbTetheringStaticIP failed: {exception}");
-            }
-#endif
-        }
-
-        private static string UPxr_GetUsbTetheringStaticIPAddress(
-            string directMethod, string fallbackMethod, string resultKey)
-        {
-            string value = "";
-#if PICO_PLATFORM
-            if (IToBService == null)
-            {
-                Debug.LogWarning("TOB service binder is not ready; cannot get USB tethering static IP.");
-                return value;
-            }
-
-            try
-            {
-                value = IToBService.Call<string>(directMethod) ?? "";
-                Debug.Log(
-                    $"USB tethering static IP get path=direct method={directMethod} value={value}");
-                return value;
-            }
-            catch (Exception directException)
-            {
-                Debug.LogWarning(
-                    $"USB tethering static IP direct get unavailable; using fallback: {directException.Message}");
-            }
-
-            try
-            {
-                using (AndroidJavaObject parameters = new AndroidJavaObject("android.os.Bundle"))
-                using (AndroidJavaObject result = IToBService.Call<AndroidJavaObject>(
-                           "pbsCommonMessageLocked", fallbackMethod, parameters))
-                {
-                    if (result != null)
-                    {
-                        value = result.Call<string>("getString", resultKey) ?? "";
-                    }
-                }
-                Debug.Log(
-                    $"USB tethering static IP get path=pbsCommonMessageLocked method={fallbackMethod} value={value}");
-            }
-            catch (Exception fallbackException)
-            {
-                Debug.LogError($"GetUsbTetheringStaticIP fallback failed: {fallbackException}");
-            }
-#endif
-            return value;
         }
 
         public static void UPxr_SetControllerPairTime(ControllerPairTimeEnum timeEnum, Action<int> callback,int ext)
@@ -1141,16 +937,8 @@ namespace Unity.XR.PICO.TOBSupport
         public static void UPxr_GetSwitchSystemFunctionStatus(SystemFunctionSwitchEnum systemFunction, Action<int> callback,int ext)
         {
 #if PICO_PLATFORM
-            // pbs* methods belong to IToBService, not ToBServiceHelper.
-            // The current tobservicelib AAR also requires the pvr IIntCallback ABI.
-            if (IToBService == null)
-            {
-                Debug.LogWarning("TOB service binder is not ready; cannot query system function status.");
-                return;
-            }
-
-            IToBService.Call("pbsGetSwitchSystemFunctionStatus", GetEnumType(systemFunction),
-                new IntCallback(callback), ext);
+            tobHelper.Call("pbsGetSwitchSystemFunctionStatus", GetEnumType(systemFunction), new IntCallback(callback),
+                ext);
 #endif
         }
 
@@ -1591,7 +1379,12 @@ namespace Unity.XR.PICO.TOBSupport
         private static bool UPxr_GetToken()
         {
             PLog.i(TAG, "GetToken Start");
+            
 #if PICO_PLATFORM
+            if (BAuthLib==null)
+            {
+                UPxr_InitEnterpriseService();
+            }
             token = BAuthLib.CallStatic<string>("featureAuthByToken", currentActivity, "getCameraInfo");
 #endif
             if (string.IsNullOrEmpty(token))
@@ -1831,11 +1624,8 @@ namespace Unity.XR.PICO.TOBSupport
 
         public static double UPxr_GetPredictedDisplayTime()
         {
-            PLog.d(TAG, "UPxr_GetPredictedDisplayTime()");
-            double predictedDisplayTime = 0;
-#if PICO_PLATFORM
-            Pxr_GetPredictedDisplayTime(ref predictedDisplayTime);
-#endif
+            double predictedDisplayTime = PXR_Plugin.System.UPxr_GetPredictedDisplayTime();
+            
             PLog.d(TAG, "UPxr_GetPredictedDisplayTime() predictedDisplayTime：" + predictedDisplayTime);
             return predictedDisplayTime;
         }
@@ -1846,8 +1636,9 @@ namespace Unity.XR.PICO.TOBSupport
             PxrSensorState2 sensorState2 = new PxrSensorState2();
             int sensorFrameIndex = 0;
 #if PICO_PLATFORM
-            Pxr_GetPredictedMainSensorState2(predictTime, ref sensorState2, ref sensorFrameIndex);
+            PXR_Plugin.Pxr_GetPredictedMainSensorState2(predictTime, ref sensorState2, ref sensorFrameIndex);
 #endif
+           
             sensorState.status = sensorState2.status == 3 ? 1 : 0;
             if (isGlobal)
             {
@@ -3069,7 +2860,7 @@ namespace Unity.XR.PICO.TOBSupport
         }
         public delegate void CapturelibCallBack(int type);
         [DllImport("CameraRenderingPlugin")]
-        public static extern void setCameraFrameBuffer(ref CameraFrame t);
+        public static extern void setCameraFrameBuffer(ref Frame t);
         [DllImport("CameraRenderingPlugin")]
         public static extern void setCapturelibCallBack(CapturelibCallBack callback);
         [DllImport("CameraRenderingPlugin")]
@@ -3079,11 +2870,11 @@ namespace Unity.XR.PICO.TOBSupport
         [DllImport("CameraRenderingPlugin")]
         public static extern bool getCameraParametersNew(int width, int height, ref RGBCameraParamsNew paramsNew);
         [DllImport("CameraRenderingPlugin")]
-        public static extern void setCconfigure(bool enableMvHevc,int videoFps);
+        public static extern void setConfigure(bool enableMvHevc,int videoFps);
         [DllImport("CameraRenderingPlugin")]
         public static extern void setConfigureDefault();
         [DllImport("CameraRenderingPlugin")]
-        public static extern bool openCameraAsync();
+        public static extern bool openCameraAsync([In] KeyValuePair[] pairs, int count);
         [DllImport("CameraRenderingPlugin")]
         public static extern bool closeCamera();
         [DllImport("CameraRenderingPlugin")]
@@ -3091,13 +2882,33 @@ namespace Unity.XR.PICO.TOBSupport
 
         [DllImport("CameraRenderingPlugin")]
         public static extern bool startPreview(IntPtr androidSurface,int mode,int width, int height);
+        [DllImport("CameraRenderingPlugin")]
+        public static extern void setConfigureMap([In] KeyValuePair[] pairs, int count);
         // 0: success, -1: error
-        public static bool OpenCameraAsync()
+        public static bool OpenCameraAsync(Dictionary<string, string>setting=null)
         {
             bool value = false;
             if (Application.platform == RuntimePlatform.Android)
             {
-                value = openCameraAsync();
+                if (setting != null)
+                {
+                    // 转换为结构体数组
+                    var pairs = new KeyValuePair[setting.Count];
+                    int index = 0;
+                    foreach (var pair in setting)
+                    {
+                        pairs[index++] = new KeyValuePair 
+                        { 
+                            Key = pair.Key, 
+                            Value = pair.Value 
+                        };
+                    }
+                    value = openCameraAsync(pairs, setting.Count);
+                }
+                else
+                {
+                    value = openCameraAsync(null, 0);
+                }
             }
             return value;
         }
@@ -3113,18 +2924,35 @@ namespace Unity.XR.PICO.TOBSupport
             return value;
         }
         
-        public static void Configure()
+        public static void Configure(Dictionary<string, string> config=null)
         {
             if (Application.platform == RuntimePlatform.Android)
             {
-                setConfigureDefault();
+                if (config==null)
+                {
+                    setConfigureDefault();
+                }
+                else
+                {
+                    var pairs = new KeyValuePair[config.Count];
+                    int index = 0;
+                    foreach (var pair in config)
+                    {
+                        pairs[index++] = new KeyValuePair 
+                        { 
+                            Key = pair.Key, 
+                            Value = pair.Value 
+                        };
+                    }
+                    setConfigureMap(pairs, config.Count);
+                }
             }
         }
         public static void Configure(bool enableMvHevc,int videoFps)
         {
             if (Application.platform == RuntimePlatform.Android)
             {
-                setCconfigure(enableMvHevc, videoFps);
+                setConfigure(enableMvHevc, videoFps);
             }
         }
         public static bool StartPerformance(PXRCaptureRenderMode mode,int width, int height)
@@ -3148,11 +2976,13 @@ namespace Unity.XR.PICO.TOBSupport
         }
         public static bool GetCameraExtrinsics(out double[] leftExtrinsics, out double[] rightExtrinsics)
         {
+            leftExtrinsics = Array.Empty<double>();
+            rightExtrinsics = Array.Empty<double>();
             int leftCount = 0;
             int rightCount = 0;
             IntPtr leftHandle = IntPtr.Zero;
             IntPtr rightHandle = IntPtr.Zero;
-            if (UPxr_GetToken())
+            // if (UPxr_GetToken())
             {
                 bool ret = getCameraExtrinsics(ref leftCount, ref leftHandle, ref rightCount, ref rightHandle);
                 leftExtrinsics = new Double[leftCount];
@@ -3161,19 +2991,14 @@ namespace Unity.XR.PICO.TOBSupport
                 Marshal.Copy(rightHandle, rightExtrinsics, 0, rightCount);
                 return ret;
             }
-            else
-            {
-                leftExtrinsics = null;
-                rightExtrinsics = null;
-                return false;
-            }
+            return false;
         }
         public static double[] GetCameraIntrinsics(int width, int height, double h_fov, double v_fov)
         {
             double[] configArray = null;
             int configCount = 0;
             IntPtr configHandle = IntPtr.Zero;
-            if (UPxr_GetToken())
+            // if (UPxr_GetToken())
             {
                 getCameraIntrinsics(width ,height,h_fov,v_fov,ref configCount, ref configHandle);
                 configArray = new Double[configCount];
@@ -3183,6 +3008,10 @@ namespace Unity.XR.PICO.TOBSupport
         }
         public static Matrix4x4 DoubleArrayToMatrix4x4(double[] array)
         {
+            if (array==null)
+            {
+                return Matrix4x4.identity;
+            }
             if (array.Length != 16)
             {
                 Debug.LogError("The double array must have exactly 16 elements for a 4x4 matrix.");
@@ -3197,748 +3026,389 @@ namespace Unity.XR.PICO.TOBSupport
         }
         public static bool GetCameraParametersNew(int width, int height, ref RGBCameraParamsNew paramsNew)
         {
-            if (UPxr_GetToken())
+            // if (UPxr_GetToken())
             {
                 return getCameraParametersNew(width,height,ref paramsNew);
             }
+        }
+        
+        public static int UPxr_SetDeviceOwner(string pkg, string cls)
+        {
+            int value = 1;
+#if PICO_PLATFORM
+            value= tobHelper.Call<int>("pbsSetDeviceOwner",pkg,cls);
+#endif
+            return value;
+        }
+
+        public static ComponentName UPxr_GetDeviceOwner()
+        {
+          
+#if PICO_PLATFORM
+            string[] value = tobHelper.Call<String[]>("pbsGetDeviceOwner");
+            if (value!=null&&value.Length==6)
+            {
+                return new ComponentName(value[0], value[1], value[2], value[3], value[4], value[5]);
+            }
+#endif
+            return new ComponentName("", "");
+        }
+        public static int UPxr_SetBrowserHomePage(string url)
+        {
+            int value = 1;
+#if PICO_PLATFORM
+            value= IToBService.Call<int>("setBrowserHomePage",url);
+#endif
+            return value;
+        }
+        public static string UPxr_GetBrowserHomePage()
+        {
+            string value = "";
+#if PICO_PLATFORM
+            value= IToBService.Call<string>("getBrowserHomePage");
+#endif
+            return value;
+        }
+        public static string UPxr_SetMotionTrackerAutoStart(int enable)
+        {
+            string value = "";
+#if PICO_PLATFORM
+            value= IToBService.Call<string>("setMotionTrackerAutoStart",enable);
+#endif
+            return value;
+        }
+
+        public static int UPxr_AllowWifiAutoJoin(WifiConfiguration configuration, int networkID, bool allowAutoJoin)
+        {
+            int value = 1;
+           
+#if PICO_PLATFORM
+             if (configuration == null)
+            {
+                value = IToBService.Call<int>("allowWifiAutoJoin", null, networkID, allowAutoJoin);
+            }
             else
             {
-                return false;
+                value = tobHelper.Call<int>("pbsAllowWifiAutoJoin", configuration.ssid, configuration.password, configuration.isClient, networkID,
+                    allowAutoJoin);
             }
-        }
-
-        private static long GetJavaLongField(AndroidJavaObject javaObject, string fieldName)
-        {
-            using (AndroidJavaObject javaClass = javaObject.Call<AndroidJavaObject>("getClass"))
-            using (AndroidJavaObject field = javaClass.Call<AndroidJavaObject>("getDeclaredField", fieldName))
-            {
-                field.Call("setAccessible", true);
-                return field.Call<long>("getLong", javaObject);
-            }
-        }
-
-        private static double GetJavaDoubleField(AndroidJavaObject javaObject, string fieldName)
-        {
-            using (AndroidJavaObject javaClass = javaObject.Call<AndroidJavaObject>("getClass"))
-            using (AndroidJavaObject field = javaClass.Call<AndroidJavaObject>("getDeclaredField", fieldName))
-            {
-                field.Call("setAccessible", true);
-                return field.Call<double>("getDouble", javaObject);
-            }
-        }
-
-        private static int GetJavaIntField(AndroidJavaObject javaObject, string fieldName)
-        {
-            using (AndroidJavaObject javaClass = javaObject.Call<AndroidJavaObject>("getClass"))
-            using (AndroidJavaObject field = javaClass.Call<AndroidJavaObject>("getDeclaredField", fieldName))
-            {
-                field.Call("setAccessible", true);
-                return field.Call<int>("getInt", javaObject);
-            }
-        }
-
-        private static PoseInfo ConvertJavaPoseToPoseInfo(AndroidJavaObject javaPose)
-        {
-            if (javaPose == null)
-            {
-                return null;
-            }
-
-            return new PoseInfo
-            {
-                timestamp = GetJavaLongField(javaPose, "timestamp"),
-                x = GetJavaDoubleField(javaPose, "x"),
-                y = GetJavaDoubleField(javaPose, "y"),
-                z = GetJavaDoubleField(javaPose, "z"),
-                rw = GetJavaDoubleField(javaPose, "rw"),
-                rx = GetJavaDoubleField(javaPose, "rx"),
-                ry = GetJavaDoubleField(javaPose, "ry"),
-                rz = GetJavaDoubleField(javaPose, "rz"),
-                type = GetJavaIntField(javaPose, "type"),
-                confidence = GetJavaIntField(javaPose, "confidence"),
-                poseError = GetJavaIntField(javaPose, "poseError")
-            };
-        }
-
-        private static PoseInfo[] ConvertJavaPoseListToPoseInfos(AndroidJavaObject javaPoseList)
-        {
-            if (javaPoseList == null)
-            {
-                return null;
-            }
-
-            int count = javaPoseList.Call<int>("size");
-            PoseInfo[] poseInfos = new PoseInfo[count];
-            for (int i = 0; i < count; i++)
-            {
-                using (AndroidJavaObject javaPose = javaPoseList.Call<AndroidJavaObject>("get", i))
-                {
-                    poseInfos[i] = ConvertJavaPoseToPoseInfo(javaPose);
-                }
-            }
-
-            return poseInfos;
-        }
-
-        private static bool TryGetRuntimeControllerPose(
-            double predictTime,
-            out PoseInfo[] poseInfos,
-            out string error)
-        {
-#if PICO_XR
-            poseInfos = null;
-            error = null;
-
-            try
-            {
-                float[] headData = new float[7] { 0, 0, 0, 0, 0, 0, 0 };
-                poseInfos = new PoseInfo[2];
-                string lastError = null;
-
-                bool hasLeftPose = TryGetRuntimeControllerPose(0, predictTime, headData, out poseInfos[0], out lastError);
-                bool hasRightPose = TryGetRuntimeControllerPose(1, predictTime, headData, out poseInfos[1], out string rightError);
-                if (!string.IsNullOrEmpty(rightError))
-                {
-                    lastError = string.IsNullOrEmpty(lastError) ? rightError : lastError + " | " + rightError;
-                }
-
-                if (hasLeftPose || hasRightPose)
-                {
-                    return true;
-                }
-
-                error = string.IsNullOrEmpty(lastError) ? "runtime controller returned no valid pose" : lastError;
-                return false;
-            }
-            catch (Exception e)
-            {
-                error = "runtime controller exception: " + e.GetType().Name + ": " + e.Message;
-                return false;
-            }
-#else
-            poseInfos = null;
-            error = "runtime controller requires PICO_XR";
-            return false;
 #endif
+            return value;
         }
-
-#if PICO_XR
-        private static bool TryGetRuntimeControllerPose(
-            uint deviceId,
-            double predictTime,
-            float[] headData,
-            out PoseInfo poseInfo,
-            out string error)
+        
+        public static LargeSpaceBoundsInfo[] UPxr_GetLargeSpaceBoundsInfoWithType()
         {
-            poseInfo = null;
-            error = null;
-
-            PxrControllerTracking tracking = new PxrControllerTracking();
-            int result = PXR_Plugin.Controller.UPxr_GetControllerTrackingState(
-                deviceId,
-                predictTime,
-                headData,
-                ref tracking);
-            if (result != 0)
-            {
-                error = $"runtime controller device={deviceId} result={result}";
-                return false;
-            }
-
-            PxrSensorState sensorState = tracking.localControllerPose;
-            poseInfo = ConvertRuntimeControllerPoseToPoseInfo(deviceId, sensorState, result);
-            return true;
-        }
-
-        private static PoseInfo ConvertRuntimeControllerPoseToPoseInfo(
-            uint deviceId,
-            PxrSensorState sensorState,
-            int nativeResult)
-        {
-            return new PoseInfo
-            {
-                timestamp = unchecked((long)sensorState.poseTimeStampNs),
-                x = sensorState.pose.position.x,
-                y = sensorState.pose.position.y,
-                z = sensorState.pose.position.z,
-                rw = sensorState.pose.orientation.w,
-                rx = sensorState.pose.orientation.x,
-                ry = sensorState.pose.orientation.y,
-                rz = sensorState.pose.orientation.z,
-                type = unchecked((int)deviceId),
-                confidence = sensorState.status,
-                poseError = nativeResult,
-                nativeKinematicsValid = true,
-                angularVelocity = new Vector3(
-                    sensorState.angularVelocity.x,
-                    sensorState.angularVelocity.y,
-                    sensorState.angularVelocity.z),
-                linearVelocity = new Vector3(
-                    sensorState.linearVelocity.x,
-                    sensorState.linearVelocity.y,
-                    sensorState.linearVelocity.z) * RuntimeControllerLinearNativeToSi,
-                angularAcceleration = new Vector3(
-                    sensorState.angularAcceleration.x,
-                    sensorState.angularAcceleration.y,
-                    sensorState.angularAcceleration.z),
-                linearAcceleration = new Vector3(
-                    sensorState.linearAcceleration.x,
-                    sensorState.linearAcceleration.y,
-                    sensorState.linearAcceleration.z) * RuntimeControllerLinearNativeToSi
-            };
-        }
-#endif
-
-        private static bool TryGetBridgeHeadPose(out PoseInfo poseInfo, out string error)
-        {
-            poseInfo = null;
-            error = null;
-
-            try
-            {
-                using (AndroidJavaClass bridgeClass =
-                       new AndroidJavaClass("com.xrobotoolkit.enterprise.EnterprisePoseBridge"))
-                {
-                    string json = bridgeClass.CallStatic<string>("getHeadPoseJson", 0L);
-                    JsonData root = JsonMapper.ToObject(json);
-                    if (IsBridgeSuccess(root) && HasJsonKey(root, "pose"))
-                    {
-                        poseInfo = ConvertBridgePoseToPoseInfo(root["pose"]);
-                        return poseInfo != null;
-                    }
-
-                    error = "bridge head failed: " + json;
-                    return false;
-                }
-            }
-            catch (Exception e)
-            {
-                ClearPendingJavaException();
-                error = "bridge head exception: " + e.GetType().Name + ": " + e.Message;
-                return false;
-            }
-        }
-
-        private static bool TryGetBridgeControllerPose(out PoseInfo[] poseInfos, out string error)
-        {
-            poseInfos = null;
-            error = null;
-
-            try
-            {
-                using (AndroidJavaClass bridgeClass =
-                       new AndroidJavaClass("com.xrobotoolkit.enterprise.EnterprisePoseBridge"))
-                {
-                    string json = bridgeClass.CallStatic<string>("getControllerPoseJson", 0L);
-                    JsonData root = JsonMapper.ToObject(json);
-                    if (IsBridgeSuccess(root) && HasJsonKey(root, "poses"))
-                    {
-                        poseInfos = ConvertBridgePoseArrayToPoseInfos(root["poses"]);
-                        return poseInfos != null;
-                    }
-
-                    error = "bridge controller failed: " + json;
-                    return false;
-                }
-            }
-            catch (Exception e)
-            {
-                ClearPendingJavaException();
-                error = "bridge controller exception: " + e.GetType().Name + ": " + e.Message;
-                return false;
-            }
-        }
-
-        private static bool TryGetBridgeControllerImu(long predictTime,
-            out ControllerImuData[] imuData, out string error)
-        {
-            imuData = null;
-            error = null;
-
-            try
-            {
-                using (AndroidJavaClass bridgeClass =
-                       new AndroidJavaClass("com.xrobotoolkit.enterprise.EnterprisePoseBridge"))
-                {
-                    double[] packed = bridgeClass.CallStatic<double[]>(
-                        "getControllerImuPacked", predictTime);
-                    if (TryConvertPackedControllerImu(packed, out imuData))
-                    {
-                        return true;
-                    }
-
-                    error = "bridge controller IMU returned no packed samples";
-                    return false;
-                }
-            }
-            catch (Exception e)
-            {
-                ClearPendingJavaException();
-                error = "bridge controller IMU exception: " + e.GetType().Name + ": " + e.Message;
-                return false;
-            }
-        }
-
-        private static bool TryConvertPackedControllerImu(double[] packed,
-            out ControllerImuData[] imuData)
-        {
-            const int fieldsPerController = 14;
-            imuData = null;
-            if (packed == null || packed.Length < 1)
-            {
-                return false;
-            }
-
-            int count = Math.Min(2, Math.Max(0, (int)packed[0]));
-            if (count == 0 || packed.Length < 1 + count * fieldsPerController)
-            {
-                return false;
-            }
-
-            ControllerImuData[] result = new ControllerImuData[count];
-            bool hasSample = false;
-            for (int i = 0; i < count; i++)
-            {
-                int offset = 1 + i * fieldsPerController;
-                if (packed[offset] < 0.5)
-                {
-                    continue;
-                }
-
-                result[i] = new ControllerImuData
-                {
-                    timestamp = checked((long)packed[offset + 1]),
-                    vx = packed[offset + 2],
-                    vy = packed[offset + 3],
-                    vz = packed[offset + 4],
-                    ax = packed[offset + 5],
-                    ay = packed[offset + 6],
-                    az = packed[offset + 7],
-                    wx = packed[offset + 8],
-                    wy = packed[offset + 9],
-                    wz = packed[offset + 10],
-                    w_ax = packed[offset + 11],
-                    w_ay = packed[offset + 12],
-                    w_az = packed[offset + 13]
-                };
-                hasSample = true;
-            }
-
-            imuData = hasSample ? result : null;
-            return hasSample;
-        }
-
-        private static void ClearPendingJavaException()
-        {
-            IntPtr exception = AndroidJNI.ExceptionOccurred();
-            if (exception == IntPtr.Zero)
-            {
-                return;
-            }
-
-            AndroidJNI.ExceptionClear();
-            AndroidJNI.DeleteLocalRef(exception);
-        }
-
-        private static bool IsBridgeSuccess(JsonData root)
-        {
-            return root != null && root.IsObject && HasJsonKey(root, "success") && (bool)root["success"];
-        }
-
-        private static bool HasJsonKey(JsonData data, string key)
-        {
-            return data != null && data.IsObject && ((IDictionary)data).Contains(key);
-        }
-
-        private static PoseInfo ConvertBridgePoseToPoseInfo(JsonData pose)
-        {
-            if (pose == null || !pose.IsObject)
-            {
-                return null;
-            }
-
-            return new PoseInfo
-            {
-                timestamp = GetJsonLong(pose, "timestamp"),
-                x = GetJsonDouble(pose, "x"),
-                y = GetJsonDouble(pose, "y"),
-                z = GetJsonDouble(pose, "z"),
-                rw = GetJsonDouble(pose, "rw"),
-                rx = GetJsonDouble(pose, "rx"),
-                ry = GetJsonDouble(pose, "ry"),
-                rz = GetJsonDouble(pose, "rz"),
-                type = GetJsonInt(pose, "type"),
-                confidence = GetJsonInt(pose, "confidence"),
-                poseError = GetJsonInt(pose, "poseError")
-            };
-        }
-
-        private static PoseInfo[] ConvertBridgePoseArrayToPoseInfos(JsonData poses)
-        {
-            if (poses == null || !poses.IsArray)
-            {
-                return null;
-            }
-
-            PoseInfo[] poseInfos = new PoseInfo[poses.Count];
-            for (int i = 0; i < poses.Count; i++)
-            {
-                poseInfos[i] = ConvertBridgePoseToPoseInfo(poses[i]);
-            }
-
-            return poseInfos;
-        }
-
-        private static ControllerImuData ConvertBridgeImu(JsonData imu)
-        {
-            if (imu == null || !imu.IsObject)
-            {
-                return null;
-            }
-
-            return new ControllerImuData
-            {
-                timestamp = GetJsonLong(imu, "timestamp"),
-                vx = GetJsonDouble(imu, "vx"),
-                vy = GetJsonDouble(imu, "vy"),
-                vz = GetJsonDouble(imu, "vz"),
-                ax = GetJsonDouble(imu, "ax"),
-                ay = GetJsonDouble(imu, "ay"),
-                az = GetJsonDouble(imu, "az"),
-                wx = GetJsonDouble(imu, "wx"),
-                wy = GetJsonDouble(imu, "wy"),
-                wz = GetJsonDouble(imu, "wz"),
-                w_ax = GetJsonDouble(imu, "w_ax"),
-                w_ay = GetJsonDouble(imu, "w_ay"),
-                w_az = GetJsonDouble(imu, "w_az")
-            };
-        }
-
-        private static ControllerImuData[] ConvertBridgeImuArray(JsonData imus)
-        {
-            if (imus == null || !imus.IsArray)
-            {
-                return null;
-            }
-
-            ControllerImuData[] result = new ControllerImuData[imus.Count];
-            for (int i = 0; i < imus.Count; i++)
-            {
-                result[i] = ConvertBridgeImu(imus[i]);
-            }
-            return result;
-        }
-
-        private static long GetJsonLong(JsonData data, string key)
-        {
-            return HasJsonKey(data, key)
-                ? long.Parse(data[key].ToString(), CultureInfo.InvariantCulture)
-                : 0L;
-        }
-
-        private static double GetJsonDouble(JsonData data, string key)
-        {
-            return HasJsonKey(data, key)
-                ? double.Parse(data[key].ToString(), CultureInfo.InvariantCulture)
-                : 0.0;
-        }
-
-        private static int GetJsonInt(JsonData data, string key)
-        {
-            return HasJsonKey(data, key)
-                ? int.Parse(data[key].ToString(), CultureInfo.InvariantCulture)
-                : 0;
-        }
-
-        private static AndroidJavaObject InvokeJavaObjectMethodWithLongArg(AndroidJavaObject javaObject,
-            string methodName, long arg)
-        {
-            IntPtr classClass = IntPtr.Zero;
-            IntPtr objectClass = IntPtr.Zero;
-            IntPtr methodNameString = IntPtr.Zero;
-            IntPtr parameterTypes = IntPtr.Zero;
-            IntPtr invokeArgsArray = IntPtr.Zero;
-
-            try
-            {
-                using (AndroidJavaObject javaClass = javaObject.Call<AndroidJavaObject>("getClass"))
-                using (AndroidJavaClass longType = new AndroidJavaClass("java.lang.Long"))
-                using (AndroidJavaObject longClass = longType.GetStatic<AndroidJavaObject>("TYPE"))
-                using (AndroidJavaObject longObject = new AndroidJavaObject("java.lang.Long", arg))
-                {
-                    classClass = AndroidJNI.FindClass("java/lang/Class");
-                    ThrowIfJavaException("find java.lang.Class");
-                    objectClass = AndroidJNI.FindClass("java/lang/Object");
-                    ThrowIfJavaException("find java.lang.Object");
-
-                    parameterTypes = AndroidJNI.NewObjectArray(1, classClass, IntPtr.Zero);
-                    AndroidJNI.SetObjectArrayElement(parameterTypes, 0, longClass.GetRawObject());
-                    ThrowIfJavaException("build parameter type array");
-
-                    IntPtr getMethodId = AndroidJNI.GetMethodID(javaClass.GetRawClass(), "getMethod",
-                        "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
-                    ThrowIfJavaException("find Class.getMethod");
-
-                    methodNameString = AndroidJNI.NewStringUTF(methodName);
-                    jvalue[] getMethodArgs = new jvalue[2];
-                    getMethodArgs[0].l = methodNameString;
-                    getMethodArgs[1].l = parameterTypes;
-
-                    IntPtr methodObjectPtr = AndroidJNI.CallObjectMethod(javaClass.GetRawObject(), getMethodId,
-                        getMethodArgs);
-                    ThrowIfJavaException("invoke Class.getMethod for " + methodName);
-                    if (methodObjectPtr == IntPtr.Zero)
-                    {
-                        return null;
-                    }
-
-                    using (AndroidJavaObject method = new AndroidJavaObject(methodObjectPtr))
-                    {
-                        invokeArgsArray = AndroidJNI.NewObjectArray(1, objectClass, IntPtr.Zero);
-                        AndroidJNI.SetObjectArrayElement(invokeArgsArray, 0, longObject.GetRawObject());
-                        ThrowIfJavaException("build invoke argument array");
-
-                        IntPtr invokeMethodId = AndroidJNI.GetMethodID(method.GetRawClass(), "invoke",
-                            "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
-                        ThrowIfJavaException("find Method.invoke");
-
-                        jvalue[] invokeArgs = new jvalue[2];
-                        invokeArgs[0].l = javaObject.GetRawObject();
-                        invokeArgs[1].l = invokeArgsArray;
-
-                        IntPtr result = AndroidJNI.CallObjectMethod(method.GetRawObject(), invokeMethodId, invokeArgs);
-                        ThrowIfJavaException("invoke " + methodName);
-                        return result == IntPtr.Zero ? null : new AndroidJavaObject(result);
-                    }
-                }
-            }
-            finally
-            {
-                if (invokeArgsArray != IntPtr.Zero)
-                {
-                    AndroidJNI.DeleteLocalRef(invokeArgsArray);
-                }
-                if (parameterTypes != IntPtr.Zero)
-                {
-                    AndroidJNI.DeleteLocalRef(parameterTypes);
-                }
-                if (methodNameString != IntPtr.Zero)
-                {
-                    AndroidJNI.DeleteLocalRef(methodNameString);
-                }
-                if (objectClass != IntPtr.Zero)
-                {
-                    AndroidJNI.DeleteLocalRef(objectClass);
-                }
-                if (classClass != IntPtr.Zero)
-                {
-                    AndroidJNI.DeleteLocalRef(classClass);
-                }
-            }
-        }
-
-        private static void ThrowIfJavaException(string context)
-        {
-            IntPtr exception = AndroidJNI.ExceptionOccurred();
-            if (exception == IntPtr.Zero)
-            {
-                return;
-            }
-
-            AndroidJNI.ExceptionClear();
-            AndroidJNI.DeleteLocalRef(exception);
-            throw new InvalidOperationException("Java exception while " + context);
-        }
-
-        private static string GetJavaObjectDiagnostics(AndroidJavaObject javaObject)
-        {
-            if (javaObject == null)
-            {
-                return "binder=null";
-            }
-
-            try
-            {
-                using (AndroidJavaObject javaClass = javaObject.Call<AndroidJavaObject>("getClass"))
-                {
-                    string className = javaClass.Call<string>("getName");
-                    return "binderClass=" + className + ", poseMethods=" + GetJavaMethodSummary(javaClass);
-                }
-            }
-            catch (Exception e)
-            {
-                return "binderDiagnosticsFailed=" + e.GetType().Name + ": " + e.Message;
-            }
-        }
-
-        private static string GetJavaMethodSummary(AndroidJavaObject javaClass)
-        {
-            IntPtr methodsArray = IntPtr.Zero;
-            try
-            {
-                IntPtr getMethodsId = AndroidJNI.GetMethodID(javaClass.GetRawClass(), "getMethods",
-                    "()[Ljava/lang/reflect/Method;");
-                ThrowIfJavaException("find Class.getMethods");
-
-                methodsArray = AndroidJNI.CallObjectMethod(javaClass.GetRawObject(), getMethodsId, new jvalue[0]);
-                ThrowIfJavaException("invoke Class.getMethods");
-                if (methodsArray == IntPtr.Zero)
-                {
-                    return "null";
-                }
-
-                int count = AndroidJNI.GetArrayLength(methodsArray);
-                int matchedCount = 0;
-                string summary = "";
-                for (int i = 0; i < count; i++)
-                {
-                    IntPtr methodPtr = AndroidJNI.GetObjectArrayElement(methodsArray, i);
-                    if (methodPtr == IntPtr.Zero)
-                    {
-                        continue;
-                    }
-
-                    try
-                    {
-                        using (AndroidJavaObject method = new AndroidJavaObject(methodPtr))
-                        {
-                            string methodString = method.Call<string>("toString");
-                            if (methodString.Contains("Pose") || methodString.Contains("pose") ||
-                                methodString.Contains("pbsCommonMessageLocked"))
-                            {
-                                if (summary.Length < 1200)
-                                {
-                                    summary += methodString + "; ";
-                                }
-
-                                matchedCount++;
-                            }
-                        }
-                    }
-                    finally
-                    {
-                        AndroidJNI.DeleteLocalRef(methodPtr);
-                    }
-                }
-
-                return matchedCount == 0 ? "no pose methods" : "count=" + matchedCount + ", " + summary;
-            }
-            catch (Exception e)
-            {
-                return "methodDiagnosticsFailed=" + e.GetType().Name + ": " + e.Message;
-            }
-            finally
-            {
-                if (methodsArray != IntPtr.Zero)
-                {
-                    AndroidJNI.DeleteLocalRef(methodsArray);
-                }
-            }
-        }
-
-        public static PoseInfo GetHeadPose()
-        {
+            string[] value = null;
+            List<LargeSpaceBoundsInfo> LargeSpaceBoundsInfos = new List<LargeSpaceBoundsInfo>();
+          
 #if PICO_PLATFORM
-            AndroidJNI.AttachCurrentThread();
-
-            if (TryGetBridgeHeadPose(out PoseInfo bridgePoseInfo, out string bridgeError))
+              value=tobHelper.Call<String[]>("pbsGetLargeSpaceBoundsInfoWithType");
+            if (value!=null)
             {
-                return bridgePoseInfo;
-            }
-
-            using (AndroidJavaClass threadTobHelperClass = new AndroidJavaClass("com.pvr.tobservice.ToBServiceHelper"))
-            using (AndroidJavaObject threadTobHelper = threadTobHelperClass.CallStatic<AndroidJavaObject>("getInstance"))
-            using (AndroidJavaObject threadServiceBinder = threadTobHelper.Call<AndroidJavaObject>("getServiceBinder"))
-            {
-                if (threadServiceBinder == null)
+                foreach (var json in value)
                 {
-                    return null;
-                }
-
-                try
-                {
-                    using (AndroidJavaObject javaPose = InvokeJavaObjectMethodWithLongArg(threadServiceBinder,
-                               "getHeadPose", 0L))
+                    LargeSpaceBoundsInfo temp = new LargeSpaceBoundsInfo();
+                    JsonData jsonData = JsonMapper.ToObject(json);
+                    temp.setType(int.Parse(jsonData["type"].ToString()));
+                    IDictionary dictionary = jsonData["bounds"] as IDictionary;
+                    for (int i = 0; i < dictionary.Count; i++)
                     {
-                        return ConvertJavaPoseToPoseInfo(javaPose);
+                        Point3D model = new Point3D();
+                        model.x = double.Parse(jsonData["bounds"][i]["x"].ToString());
+                        model.y = double.Parse(jsonData["bounds"][i]["y"].ToString());
+                        model.z = double.Parse(jsonData["bounds"][i]["z"].ToString());
+                        temp.addPoint3D(model);;
                     }
-                }
-                catch (Exception e)
-                {
-                    throw new InvalidOperationException(bridgeError + " | direct fallback: " + e.Message + " | " + GetJavaObjectDiagnostics(threadServiceBinder),
-                        e);
+                    LargeSpaceBoundsInfos.Add(temp);
                 }
             }
 #endif
-            return null;
+            return LargeSpaceBoundsInfos.ToArray();
         }
-
-        public static PoseInfo[] GetControllerPose(double predictTime)
+        
+        public static int UPxr_GetHeadTrackingStatus()
         {
+            int value = -1;
 #if PICO_PLATFORM
-            AndroidJNI.AttachCurrentThread();
-
-            if (TryGetRuntimeControllerPose(predictTime, out PoseInfo[] runtimePoseInfos, out string runtimeError))
-            {
-                return runtimePoseInfos;
-            }
-
-            if (TryGetBridgeControllerPose(out PoseInfo[] bridgePoseInfos, out string bridgeError))
-            {
-                return bridgePoseInfos;
-            }
-
-            using (AndroidJavaClass threadTobHelperClass = new AndroidJavaClass("com.pvr.tobservice.ToBServiceHelper"))
-            using (AndroidJavaObject threadTobHelper = threadTobHelperClass.CallStatic<AndroidJavaObject>("getInstance"))
-            using (AndroidJavaObject threadServiceBinder = threadTobHelper.Call<AndroidJavaObject>("getServiceBinder"))
-            {
-                if (threadServiceBinder == null)
-                {
-                    return null;
-                }
-
-                try
-                {
-                    using (AndroidJavaObject javaPoseList = InvokeJavaObjectMethodWithLongArg(threadServiceBinder,
-                               "getControllerPose", 0L))
-                    {
-                        return ConvertJavaPoseListToPoseInfos(javaPoseList);
-                    }
-                }
-                catch (Exception e)
-                {
-                    throw new InvalidOperationException(runtimeError + " | " + bridgeError +
-                        " | direct fallback: " + e.Message + " | " + GetJavaObjectDiagnostics(threadServiceBinder),
-                        e);
-                }
-            }
+            value= IToBService.Call<int>("getHeadTrackingStatus");
 #endif
-            return null;
+            return value;
         }
-
-        public static ControllerImuData[] GetControllerImuData(long predictTime)
+        
+        public static Pose UPxr_GetHeadPose(long predictTime)
         {
+            Pose value = null;
 #if PICO_PLATFORM
-            // The owning worker attaches once. A local frame bounds every temporary JNI
-            // reference made while reflecting through the TobService Binder.
-            bool pushedLocalFrame = AndroidJNI.PushLocalFrame(32) == 0;
-            try
-            {
-                return TryGetBridgeControllerImu(predictTime, out ControllerImuData[] imuData, out _)
-                    ? imuData
-                    : null;
-            }
-            finally
-            {
-                if (pushedLocalFrame)
-                {
-                    AndroidJNI.PopLocalFrame(IntPtr.Zero);
-                }
-            }
-#else
-            return null;
+          string  temp= tobHelper.Call<string>("pbsGetHeadPose",predictTime);
+          if (!string.IsNullOrEmpty(temp))
+          {
+              // Debug.Log("pbsGetHeadPose: headPose = "+temp);
+              value=JsonParser.ParsePoseFromJson(temp);
+          }
 #endif
+            return value;
         }
+
+        public static List<Pose> UPxr_GetControllerPose(long predictTime)
+        {
+            List<Pose> value = null;
+#if PICO_PLATFORM
+          string  temp= tobHelper.Call<string>("pbsGetControllerPose",predictTime);
+          if (!string.IsNullOrEmpty(temp))
+          {
+              // Debug.Log("pbsGetControllerPose: ControllerPose = "+temp);
+              value=JsonParser.ParsePoseArrayFromJson(temp);
+              if (value==null)
+              {
+                  Debug.Log("pbsGetControllerPose: value=null ");
+              }
+          }
+#endif
+            return value;
+        }
+        public static List<SwiftDevice> UPxr_GetSwiftTrackerDevices()
+        {
+            List<SwiftDevice> value = null;
+#if PICO_PLATFORM
+          string  temp= tobHelper.Call<string>("pbsGetSwiftTrackerDevices");
+          if (!string.IsNullOrEmpty(temp))
+          {
+              // Debug.Log("pbsGetSwiftTrackerDevices: devices = "+temp);
+              value=JsonParser.ParseSwiftDeviceArrayFromJson(temp);
+              if (value==null)
+              {
+                  Debug.Log("pbsGetSwiftTrackerDevices: value=null ");
+              }
+          }
+#endif
+            return value;
+        }
+        
+        public static Pose UPxr_GetSwiftPose(String swiftSN, long predictTime)
+        {
+            Pose value = null;
+#if PICO_PLATFORM
+          string  temp= tobHelper.Call<string>("pbsGetSwiftPose",swiftSN,predictTime);
+          if (!string.IsNullOrEmpty(temp))
+          {
+              // Debug.Log("pbsGetSwiftPose: Pose = "+temp);
+              value=JsonParser.ParsePoseFromJson(temp);
+          }
+#endif
+            return value;
+        }
+        
+        public static IMUData UPxr_GetSwiftIMUData(String swiftSN, long predictTime)
+        {
+            IMUData value = null;
+#if PICO_PLATFORM
+          string  temp= tobHelper.Call<string>("pbsGetSwiftIMUData",swiftSN,predictTime);
+          if (!string.IsNullOrEmpty(temp))
+          {
+              // Debug.Log("pbsGetSwiftIMUData: data = "+temp);
+              value=JsonParser.ParseIMUDataFromJson(temp);
+          }
+#endif
+            return value;
+        }
+        public static IMUData UPxr_GetHeadIMUData(long predictTime)
+        {
+            IMUData value = null;
+#if PICO_PLATFORM
+          string  temp= tobHelper.Call<string>("pbsGetHeadIMUData",predictTime);
+          if (!string.IsNullOrEmpty(temp))
+          {
+              // Debug.Log("pbsGetHeadIMUData: IMUData = "+temp);
+              value=JsonParser.ParseIMUDataFromJson(temp);
+          }
+#endif
+            return value;
+        }
+        
+        public static List<IMUData> UPxr_GetControllerIMUData(long predictTime)
+        {
+            List<IMUData> value = null;
+#if PICO_PLATFORM
+          string  temp= tobHelper.Call<string>("pbsGetControllerIMUData",predictTime);
+          if (!string.IsNullOrEmpty(temp))
+          {
+              // Debug.Log("pbsGetControllerIMUData: IMUDatas = "+temp);
+              value=JsonParser.ParseIMUDatasFromJson(temp);
+              if (value==null)
+              {
+                  Debug.Log("pbsGetControllerIMUData: value=null ");
+              }
+          }
+#endif
+            return value;
+        }
+        
+        public static int UPxr_StartSwiftTrackerPairing(int trackerId)
+        {
+            int value = -1;
+#if PICO_PLATFORM
+            value= IToBService.Call<int>("startSwiftTrackerPairing",trackerId);
+#endif
+            return value;
+        }
+        public static int UPxr_UnBondSwiftTracker(int trackerId)
+        {
+            int value = -1;
+#if PICO_PLATFORM
+            value= IToBService.Call<int>("unBondSwiftTracker",trackerId);
+#endif
+            return value;
+        }
+        public static int UPxr_ResetTracking()
+        {
+            int value = -1;
+#if PICO_PLATFORM
+            value= IToBService.Call<int>("resetTracking");
+#endif
+            return value;
+        }
+        
+        
+        public static int UPxr_FileSync()
+        {
+            int value = -1;
+#if PICO_PLATFORM
+            value= IToBService.Call<int>("fileSync");
+#endif
+            return value;
+        }
+        public static int UPxr_SetFenceColor(int fenceType, int red, int green, int blue, int alpha)
+        {
+            int value = -1;
+#if PICO_PLATFORM
+            value= IToBService.Call<int>("setFenceColor",fenceType,red,green,blue,alpha);
+#endif
+            return value;
+        }
+        public static int[] UPxr_GetFenceColor(int fenceType)
+        {
+            int[] value = null;
+#if PICO_PLATFORM
+            value= IToBService.Call<int[]>("getFenceColor",fenceType);
+#endif
+            return value;
+        }
+        
+        public static int UPxr_BeginHandTrackingHook()
+        {
+            int value = -1;
+#if PICO_PLATFORM
+            value= IToBService.Call<int>("beginHandTrackingHook");
+#endif
+            return value;
+        }
+        public static int UPxr_EndHandTrackingHook()
+        {
+            int value = -1;
+#if PICO_PLATFORM
+            value= IToBService.Call<int>("endHandTrackingHook");
+#endif
+            return value;
+        }
+        
+        public static int UPxr_SetHandTrackingHookData(HandStateAlg left, HandStateAlg right)
+        {
+            int value = 1;
+            string leftJson = HandStateAlg.ToJson(left);
+            string rightJson = HandStateAlg.ToJson(right);
+#if PICO_PLATFORM
+            value= tobHelper.Call<int>("pbsSetHandTrackingHookData",leftJson,rightJson);
+          
+#endif
+            return value;
+        }
+        public static int UPxr_SetUsbTetheringStaticIP(String localAddr, String clientAddr)
+        {
+            int value = -1;
+#if PICO_PLATFORM
+            value= IToBService.Call<int>("setUsbTetheringStaticIP",localAddr,clientAddr);
+#endif
+            return value;
+        }
+        public static string UPxr_GetUsbTetheringStaticIPLocal()
+        {
+            string value = "";
+#if PICO_PLATFORM
+            value= IToBService.Call<string>("getUsbTetheringStaticIPLocal");
+#endif
+            return value;
+        }
+        public static string UPxr_GetUsbTetheringStaticIPClient()
+        {
+            string value = "";
+#if PICO_PLATFORM
+            value= IToBService.Call<string>("getUsbTetheringStaticIPClient");
+#endif
+            return value;
+        }
+        public static int UPxr_SetLargeSpaceMapScale(float scale, Action<int> callback)
+        {
+            int value = -1;
+#if PICO_PLATFORM
+            value=tobHelper.Call<int>("pbsSetLargeSpaceMapScale",scale,new IntCallback(callback));
+#endif
+            return value;
+        }
+        
+        public static PxrSensorState2 UPxr_GetPredictedMainSensorState2(double predictTime)
+        {
+            PxrSensorState2 sensorState2 = new PxrSensorState2();
+            int sensorFrameIndex = 0;
+#if PICO_PLATFORM
+            PXR_Plugin.Pxr_GetPredictedMainSensorState2(predictTime, ref sensorState2, ref sensorFrameIndex);
+#endif
+            return sensorState2;
+        }
+        
+        private const string SLAM_DLL_NAME="libtrackingclient.pxr";
+
+        [DllImport(SLAM_DLL_NAME, CallingConvention = CallingConvention.Cdecl)]
+        private static extern IntPtr CreateClient();
+        [DllImport(SLAM_DLL_NAME, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int ConvertCoordinate(IntPtr client, ref AlgoResult src,ConvertCoordinateType type,ref AlgoResult dest);
+
+        private static IntPtr SlamDllclient;
+        public static void Create_Client()
+        {
+            SlamDllclient= CreateClient();
+        }
+        public static int ConvertCoordinate(ConvertCoordinateType type,UnityEngine.Pose srcPose,ref UnityEngine.Pose destPose)
+        {
+            AlgoResult src = new AlgoResult();
+            AlgoResult dest = new AlgoResult();
+            src.pose.x = srcPose.position.x;
+            src.pose.y = srcPose.position.y;
+            src.pose.z = srcPose.position.z;
+            src.pose.rw = srcPose.rotation.w;
+            src.pose.rx = srcPose.rotation.x;
+            src.pose.rz = srcPose.rotation.z;
+            src.pose.ry = srcPose.rotation.y;
+            int ret= ConvertCoordinate(SlamDllclient, ref src, type, ref dest);
+            destPose.position = new Vector3((float)dest.pose.x, (float)dest.pose.y, (float)dest.pose.z);
+            destPose.rotation = new Quaternion( (float)dest.pose.rx,(float)dest.pose.ry, (float)dest.pose.rz,(float) dest.pose.rw);
+            float y = PXR_Plugin.System.UPxr_GetConfigFloat(ConfigType.ToDelaSensorY);
+            if (type==ConvertCoordinateType.kLocal2Global)
+            {
+                destPose.position -= y * Vector3.up;
+            }
+            else
+            {
+                destPose.position += y * Vector3.up;
+            }
+           
+            return ret;
+        }
+        public enum ConvertCoordinateType{
+            kLocal2Global = 0,
+            kGlobal2Local = 1,
+        }
+            
+       
     }
    
 }

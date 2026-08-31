@@ -158,8 +158,9 @@ public class UIOperate : MonoBehaviour
         if (bind)
         {
             const int ext = 0;
-            int setResult = PXR_Enterprise.SetTrackingDataIncludingPredictions(false, ext);
-            int enabled = PXR_Enterprise.GetTrackingDataIncludingPredictions(ext);
+            int setResult = PicoEnterpriseServiceCompat.SetTrackingDataIncludingPredictions(
+                false, ext);
+            int enabled = PicoEnterpriseServiceCompat.GetTrackingDataIncludingPredictions(ext);
             Debug.Log(
                 $"Tracking data including predictions: setResult={setResult}, enabled={enabled}");
             if (setResult != 0 || enabled != 0)
@@ -208,7 +209,7 @@ public class UIOperate : MonoBehaviour
                 $"USB static IP setter returned {result}, but the configured addresses already match.");
         }
 
-        PXR_Enterprise.EnableUsbTetheringStaticIP();
+        PicoEnterpriseServiceCompat.EnableUsbTetheringStaticIp();
         PXR_Enterprise.SwitchSystemFunction(
             SystemFunctionSwitchEnum.SFS_USB_TETHERING, SwitchEnum.S_OFF);
         yield return new WaitForSecondsRealtime(1.0f);
@@ -244,7 +245,7 @@ public class UIOperate : MonoBehaviour
     {
         _usbTetheringRecoveryInProgress = true;
         Debug.LogWarning($"USB address {UsbTetheringLocalAddress} is missing; restarting USB tethering.");
-        PXR_Enterprise.EnableUsbTetheringStaticIP();
+        PicoEnterpriseServiceCompat.EnableUsbTetheringStaticIp();
         PXR_Enterprise.SwitchSystemFunction(
             SystemFunctionSwitchEnum.SFS_USB_TETHERING, SwitchEnum.S_OFF);
         yield return new WaitForSecondsRealtime(0.5f);
@@ -517,10 +518,13 @@ public class UIOperate : MonoBehaviour
         }
         else
         {
-            MotionTrackerConnectState state = new MotionTrackerConnectState();
-            PXR_MotionTracking.GetMotionTrackerConnectStateWithSN(ref state);
-            //  PXR_MotionTracking.GetMotionTrackerConnectStateWithSN(ref state);
-            TrackNum.text = "Num: " + state.trackerSum;
+            List<SwiftDevice> trackers = PXR_Enterprise.GetSwiftTrackerDevices();
+            int trackerCount = trackers == null
+                ? 0
+                : trackers.FindAll(
+                    tracker => tracker != null &&
+                               tracker.connectState == SwiftDevice.STATUS_ONLINE).Count;
+            TrackNum.text = "Num: " + trackerCount;
 
             if (tType == TrackingData.TrackingType.Body)
             {
@@ -533,7 +537,7 @@ public class UIOperate : MonoBehaviour
                 // Enable full body motion capture default mode
                 int ret = PXR_MotionTracking.StartBodyTracking(mode, boneLength);
                 BodyInfo.text = "Start BodyTracking " + ret;
-                Debug.Log(" UpdateBodyTracking :" + ret + " trackerSum:" + state.trackerSum);
+                Debug.Log(" UpdateBodyTracking :" + ret + " trackerSum:" + trackerCount);
             }
             else if (tType == TrackingData.TrackingType.Motion)
             {

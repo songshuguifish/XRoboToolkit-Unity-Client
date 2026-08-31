@@ -1,4 +1,5 @@
-﻿/*******************************************************************************
+﻿#if !PICO_OPENXR_SDK
+/*******************************************************************************
 Copyright © 2015-2022 PICO Technology Co., Ltd.All rights reserved.  
 
 NOTICE：All information contained herein is, and remains the property of 
@@ -17,114 +18,8 @@ using UnityEngine.XR;
 
 namespace Unity.XR.PXR
 {
-    public static class PXR_Input
+    public static partial class PXR_Input
     {
-        /// <summary>Device models.</summary>
-        public enum ControllerDevice
-        {
-            /// <summary>PICO G2.</summary>
-            G2 = 3,
-            /// <summary>PICO Neo2.</summary>
-            Neo2,
-            /// <summary>PICO Neo3.</summary>
-            Neo3,
-            /// <summary>PICO 4.</summary>
-            PICO_4,
-            /// <summary>PICO G3.</summary>
-            G3,
-            /// <summary>PICO 4 Ultra.</summary>
-            PICO_4U,
-            /// <summary>A new device model.</summary>
-            NewController = 10
-        }
-
-        /// <summmary>The controller types.</summary>
-        public enum Controller
-        {
-            /// <summary>Left controller.</summary>
-            LeftController,
-            /// <summary>Right controller.</summary>
-            RightController,
-        }
-
-        /// <summary>For specifying which controller to vibrate.</summary>
-        public enum VibrateController
-        {
-            /// <summary>None.</summary>
-            No = 0,
-            /// <summary>The left controller.</summary>
-            Left = 1,
-            /// <summary>The right controller.</summary>
-            Right = 2,
-            /// <summary>Both the left and right controllers.</summary>
-            LeftAndRight = 3,
-        }
-
-        /// <summary>For specifying the controller(s) to send the haptic data to.</summary>
-        public enum VibrateType
-        {
-            /// <summary>Both controllers.</summary>
-            None = 0,
-            /// <summary>The left controller.</summary>
-            LeftController = 1,
-            /// <summary>The right controller.</summary>
-            RightController = 2,
-            /// <summary>Both controllers.</summary>
-            BothController = 3,
-            /// <summary>The left controller of PICO 4 Ultra device.</summary>
-            LeftPICO4U = 4,
-            /// <summary>The right controller of PICO 4 Ultra device.</summary>
-            RightPICO4U = 8,
-            /// <summary>Both controllers of PICO 4 Ultra device.</summary>
-            BothPICO4U = 12,
-        }
-
-        /// <summary>Whether to keep the controller vibrating while caching haptic data.</summary>
-        public enum CacheType
-        {
-            /// <summary>Don't cache.</summary>
-            DontCache = 0,
-            /// <summary>Cache haptic data and keep vibrating.</summary>
-            CacheAndVibrate = 1,
-            /// <summary>Cache haptic data and stop vibrating.</summary>
-            CacheNoVibrate = 2,
-        }
-
-        /// <summary>Whether to enable audio channel inversion. Once audio channel inversion is enabled, the left controller vibrates with the audio data from the right channel, and vice versa.</summary>
-        public enum ChannelFlip
-        {
-            /// <summary>Disable audio channel inversion.</summary>
-            No,
-            /// <summary>Enable audio channel inversion.</summary>
-            Yes,
-        }
-
-        /// <summary>Whether to keep the controller vibrating while caching audio-based vibration data.</summary>
-        public enum CacheConfig
-        {
-            /// <summary>Cache audio-based vibration data and keep vibrating.</summary>
-            CacheAndVibrate = 1,
-            /// <summary>Cache audio-based vibration data and stop vibrating.</summary>
-            CacheNoVibrate = 2,
-        }
-
-        /// <summary>The status of controllers.</summary>
-        public enum ControllerStatus
-        {
-            /// <summary>The controller is static.</summary>
-            Static = 0,
-            /// <summary>The controller is in 6DoF tracking mode.</summary>
-            SixDof,
-            /// <summary>The controller is in 3DoF tracking mode.</summary>
-            ThreeDof,
-            /// <summary>The controller remains static for a long time and is now in sleep mode.</summary>
-            Sleep,
-            /// <summary>The controller collided with something else during 3DoF tracking.</summary>
-            CollidedIn3Dof,
-            /// <summary>The controller collided with something else during 6DoF tracking.</summary>
-            CollidedIn6Dof,
-        }
-
         /// <summary>Gets the status of the specified controller.</summary>
         /// <param name="controller">Specifies the controller to get status for: `LeftController` or `RightController`.</param>
         /// <returns>The status of the specified controller:
@@ -138,10 +33,7 @@ namespace Unity.XR.PXR
         public static ControllerStatus GetControllerStatus(Controller controller)
         {
             PxrControllerTracking pxrControllerTracking = new PxrControllerTracking();
-            float[] headData = new float[7] { 0, 0, 0, 0, 0, 0, 0 };
-
-            PXR_Plugin.Controller.UPxr_GetControllerTrackingState((uint)controller, PXR_Plugin.System.UPxr_GetPredictedDisplayTime(), headData, ref pxrControllerTracking);
-
+            PXR_Plugin.Controller.UPxr_GetControllerTrackingState((uint)controller, PXR_Plugin.System.UPxr_GetPredictedDisplayTime(), ref pxrControllerTracking);
             return (ControllerStatus)pxrControllerTracking.localControllerPose.status;
         }
 
@@ -152,19 +44,19 @@ namespace Unity.XR.PXR
         /// Gets the current dominant controller.
         /// </summary>
         /// <returns>The current dominant controller: `LeftController`; `RightController`.</returns>
+        [Obsolete("GetDominantHand is not supported", true)]
         public static Controller GetDominantHand()
         {
-            return (Controller)PXR_Plugin.Controller.UPxr_GetControllerMainInputHandle();
+            return Controller.LeftController;
         }
 
         /// <summary>
         /// Sets a controller as the dominant controller.
         /// </summary>
         /// <param name="controller">The controller to be set as the dominant controller: `0`-left controller; `1`-right controller.</param>
+        [Obsolete("SetDominantHand is not supported", true)]
         public static void SetDominantHand(Controller controller)
-        {
-            PXR_Plugin.Controller.UPxr_SetControllerMainInputHandle((UInt32)controller);
-        }
+        {}
 
         /// <summary>
         /// Sets controller vibration, including vibration amplitude and duration.
@@ -176,11 +68,9 @@ namespace Unity.XR.PXR
         /// * `0`: left controller
         /// * `1`: right controller
         /// </param>
-        [Obsolete("Please use SendHapticImpulse instead")]
+        [Obsolete("Please use SendHapticImpulse instead", true)]
         public static void SetControllerVibration(float strength, int time, Controller controller)
-        {
-            PXR_Plugin.Controller.UPxr_SetControllerVibration((UInt32)controller, strength, time);
-        }
+        {}
 
         /// <summary>
         /// Gets the device model.
@@ -204,17 +94,7 @@ namespace Unity.XR.PXR
         /// </returns>
         public static bool IsControllerConnected(Controller controller)
         {
-            var state = false;
-            switch (controller)
-            {
-                case Controller.LeftController:
-                    InputDevices.GetDeviceAtXRNode(XRNode.LeftHand).TryGetFeatureValue(PXR_Usages.controllerStatus, out state);
-                    return state;
-                case Controller.RightController:
-                    InputDevices.GetDeviceAtXRNode(XRNode.RightHand).TryGetFeatureValue(PXR_Usages.controllerStatus, out state);
-                    return state;
-            }
-            return state;
+            return PXR_Plugin.Controller.UPxr_IsControllerConnected(controller);
         }
 
         /// <summary>
@@ -242,9 +122,7 @@ namespace Unity.XR.PXR
         public static Quaternion GetControllerPredictRotation(Controller controller, double predictTime)
         {
             PxrControllerTracking pxrControllerTracking = new PxrControllerTracking();
-            float[] headData = new float[7] { 0, 0, 0, 0, 0, 0, 0 };
-
-            PXR_Plugin.Controller.UPxr_GetControllerTrackingState((uint)controller, predictTime, headData, ref pxrControllerTracking);
+            PXR_Plugin.Controller.UPxr_GetControllerTrackingState((uint)controller, predictTime, ref pxrControllerTracking);
 
             return new Quaternion(
                 pxrControllerTracking.localControllerPose.pose.orientation.x,
@@ -265,9 +143,7 @@ namespace Unity.XR.PXR
         public static Vector3 GetControllerPredictPosition(Controller controller, double predictTime)
         {
             PxrControllerTracking pxrControllerTracking = new PxrControllerTracking();
-            float[] headData = new float[7] { 0, 0, 0, 0, 0, 0, 0 };
-
-            PXR_Plugin.Controller.UPxr_GetControllerTrackingState((uint)controller, predictTime, headData, ref pxrControllerTracking);
+            PXR_Plugin.Controller.UPxr_GetControllerTrackingState((uint)controller, predictTime, ref pxrControllerTracking);
 
             return new Vector3(
                 pxrControllerTracking.localControllerPose.pose.position.x,
@@ -286,11 +162,12 @@ namespace Unity.XR.PXR
         /// <param name="frequency">Vibration frequency, which ranges from `50` to `500` Hz.</param>
         /// <param name="strength">Vibration amplitude. Its valid value ranges from `0` to `1`. The higher the value, the stronger the vibration amplitude.</param>
         /// <param name="time">Vibration duration, which ranges from `0` to `65535` ms.</param>
-        [Obsolete("Please use SendHapticImpulse instead")]
+        [Obsolete("Please use SendHapticImpulse instead", true)]
         public static int SetControllerVibrationEvent(UInt32 hand, int frequency, float strength, int time)
         {
-            return PXR_Plugin.Controller.UPxr_SetControllerVibrationEvent(hand, frequency, strength, time);
+            return -1;
         }
+
 
         /// @deprecated Use \ref StopHapticBuffer(int sourceId, bool clearCache) instead.
         /// <summary>
@@ -298,10 +175,10 @@ namespace Unity.XR.PXR
         /// </summary>
         /// <param name="id">A reserved parameter, set it to the source ID returned by `StartVibrateBySharem` or `SaveVibrateByCache` to stop the corresponding vibration,
         /// or set it to `0` to stop all vibrations.</param>
-        [Obsolete("Please use StopHapticBuffer instead")]
+        [Obsolete("Please use StopHapticBuffer instead", true)]
         public static int StopControllerVCMotor(int sourceId)
         {
-            return PXR_Plugin.Controller.UPxr_StopControllerVCMotor(sourceId);
+            return -1;
         }
 
         /// @deprecated Deprecated.
@@ -309,16 +186,16 @@ namespace Unity.XR.PXR
         /// Starts audio-triggered vibration for specified controller(s). The audio data come from an audio file.
         /// </summary>
         /// <param name="file">The path to the audio file.</param>
-        /// <param name="vibrateController">The controller(s) to enable vibration for:
+        /// <param name="vibrateType">The controller(s) to enable vibration for:
         /// * `0`: none
         /// * `1`: left controller
         /// * `2`: right controller
         /// * `3`: left and right controllers
         /// </param>
-        [Obsolete("Deprecated")]
-        public static int StartControllerVCMotor(string file, VibrateController vibrateController)
+        [Obsolete("StartControllerVCMotor is not supported", true)]
+        public static int StartControllerVCMotor(string file, VibrateType vibrateType)
         {
-            return PXR_Plugin.Controller.UPxr_StartControllerVCMotor(file, (int)vibrateController);
+            return -1;
         }
 
         /// @deprecated Deprecated.
@@ -333,10 +210,10 @@ namespace Unity.XR.PXR
         /// * `4`: 4×standard amplitude
         /// @note "3×standard amplitude" and "4×standard amplitude" are NOT recommended as they will cause serious loss of vibration details.
         /// </param>
-        [Obsolete("Deprecated")]
+        [Obsolete("SetControllerAmp is not supported", true)]
         public static int SetControllerAmp(float mode)
         {
-            return PXR_Plugin.Controller.UPxr_SetControllerAmp(mode);
+            return -1;
         }
 
         /// @deprecated Use \ref SendHapticBuffer(VibrateType vibrateType, AudioClip audioClip, ChannelFlip channelFlip, ref int sourceId, CacheType cacheType) instead.
@@ -344,7 +221,7 @@ namespace Unity.XR.PXR
         /// Starts audio-triggered vibration for specified controller(s). The audio data come from an audio clip passed to the Unity Engine.
         /// </summary>
         /// <param name="audioClip">The path to the audio clip.</param>
-        /// <param name="vibrateController">The controller(s) to enable vibration for:
+        /// <param name="vibrateType">The controller(s) to enable vibration for:
         /// * `0`: none
         /// * `1`: left controller
         /// * `2`: right controller
@@ -357,20 +234,12 @@ namespace Unity.XR.PXR
         /// </param>
         /// <param nname="sourceId">Returns the unique ID for controlling the corresponding vibration,
         /// which will be used in `StartVibrateByCache`, `ClearVibrateByCache` or `StopControllerVCMotor`.</param>
-        [Obsolete("Please use SendHapticBuffer instead")]
-        public static int StartVibrateBySharem(AudioClip audioClip, VibrateController vibrateController, ChannelFlip channelFlip, ref int sourceId)
+        [Obsolete("Please use SendHapticBuffer instead", true)]
+        public static int StartVibrateBySharem(AudioClip audioClip, VibrateType vibrateType, ChannelFlip channelFlip, ref int sourceId)
         {
-            if (audioClip == null)
-            {
-                return 0;
-            }
-            float[] data = new float[audioClip.samples * audioClip.channels];
-            int buffersize = audioClip.samples * audioClip.channels;
-            audioClip.GetData(data, 0);
-            int sampleRate = audioClip.frequency;
-            int channelMask = audioClip.channels;
-            return PXR_Plugin.Controller.UPxr_StartVibrateBySharem(data, (int)vibrateController, buffersize, sampleRate, channelMask, 32, (int)channelFlip, ref sourceId);
+            return -1;
         }
+
 
         /**
          * @deprecated Use \ref SendHapticBuffer(VibrateType vibrateType, float[] pcmData, int buffersize, int frequency, int channelMask, ChannelFlip channelFlip, ref int sourceId, CacheType cacheType) instead.
@@ -379,7 +248,7 @@ namespace Unity.XR.PXR
         /// Starts audio-triggered vibration for specified controller(s). This function is the overloaded version.
         /// </summary>
         /// <param name="data">The PCM data.</param>
-        /// <param name="vibrateController">The controller(s) to enable vibration for:
+        /// <param name="vibrateType">The controller(s) to enable vibration for:
         /// * `0`: none
         /// * `1`: left controller
         /// * `2`: right controller
@@ -395,11 +264,12 @@ namespace Unity.XR.PXR
         /// </param>
         /// <param name="sourceId">Returns the unique ID for controlling the corresponding vibration,
         /// which will be used in `StartVibrateByCache`, `ClearVibrateByCache` or `StopControllerVCMotor`.</param>
-        [Obsolete("Please use SendHapticBuffer instead")]
-        public static int StartVibrateBySharem(float[] data, VibrateController vibrateController, int buffersize, int frequency, int channelMask, ChannelFlip channelFlip, ref int sourceId)
+        [Obsolete("Please use SendHapticBuffer instead", true)]
+        public static int StartVibrateBySharem(float[] data, VibrateType vibrateType, int buffersize, int frequency, int channelMask, ChannelFlip channelFlip, ref int sourceId)
         {
-            return PXR_Plugin.Controller.UPxr_StartVibrateBySharem(data, (int)vibrateController, buffersize, frequency, channelMask, 32, (int)channelFlip, ref sourceId);
+            return -1;
         }
+
 
         /// @deprecated Use \ref SendHapticBuffer(VibrateType vibrateType, AudioClip audioClip, ChannelFlip channelFlip, ref int sourceId, CacheType cacheType) instead.
         /// <summary>
@@ -407,7 +277,7 @@ namespace Unity.XR.PXR
         /// @note The cached data can be extracted from the cache directory and then transmitted, which reduces resource consumption and improves service performance.
         /// </summary>
         /// <param name="audioClip">The path to the audio clip.</param>
-        /// <param name="vibrateController">The controller(s) to cache data for:
+        /// <param name="vibrateType">The controller(s) to cache data for:
         /// * `0`: none
         /// * `1`: left controller
         /// * `2`: right controller
@@ -427,19 +297,10 @@ namespace Unity.XR.PXR
         /// * `0`: success
         /// * `-1`: failure
         /// </returns>
-        [Obsolete("Please use SendHapticBuffer instead")]
-        public static int SaveVibrateByCache(AudioClip audioClip, VibrateController vibrateController, ChannelFlip channelFlip, CacheConfig cacheConfig, ref int sourceId)
+        [Obsolete("Please use SendHapticBuffer instead", true)]
+        public static int SaveVibrateByCache(AudioClip audioClip, VibrateType vibrateType, ChannelFlip channelFlip, CacheConfig cacheConfig, ref int sourceId)
         {
-            if (audioClip == null)
-            {
-                return 0;
-            }
-            float[] data = new float[audioClip.samples * audioClip.channels];
-            int buffersize = audioClip.samples * audioClip.channels;
-            audioClip.GetData(data, 0);
-            int sampleRate = audioClip.frequency;
-            int channelMask = audioClip.channels;
-            return PXR_Plugin.Controller.UPxr_SaveVibrateByCache(data, (int)vibrateController, buffersize, sampleRate, channelMask, 32, (int)channelFlip, (int)cacheConfig, ref sourceId);
+            return -1;
         }
 
         /// @deprecated Use \ref SendHapticBuffer(VibrateType vibrateType, float[] pcmData, int buffersize, int frequency, int channelMask, ChannelFlip channelFlip, ref int sourceId, CacheType cacheType)
@@ -448,7 +309,7 @@ namespace Unity.XR.PXR
         /// @note The cached data can be extracted from the cache directory and then transmitted, which reduces resource consumption and improves service performance.
         /// </summary>
         /// <param name="data">The PCM data.</param>
-        /// <param name="vibrateController">The controller(s) to cache data for:
+        /// <param name="vibrateType">The controller(s) to cache data for:
         /// * `0`: none
         /// * `1`: left controller
         /// * `2`: right controller
@@ -472,10 +333,10 @@ namespace Unity.XR.PXR
         /// * `0`: success
         /// * `-1`: failure
         /// </returns>
-        [Obsolete("Please use SendHapticBuffer instead")]
-        public static int SaveVibrateByCache(float[] data, VibrateController vibrateController, int buffersize, int frequency, int channelMask, ChannelFlip channelFlip, CacheConfig cacheConfig, ref int sourceId)
+        [Obsolete("Please use SendHapticBuffer instead", true)]
+        public static int SaveVibrateByCache(float[] data, VibrateType vibrateType, int buffersize, int frequency, int channelMask, ChannelFlip channelFlip, CacheConfig cacheConfig, ref int sourceId)
         {
-            return PXR_Plugin.Controller.UPxr_SaveVibrateByCache(data, (int)vibrateController, buffersize, frequency, channelMask, 32, (int)channelFlip, (int)cacheConfig, ref sourceId);
+            return -1;
         }
 
         /// @deprecated Use \ref StartHapticBuffer instead.
@@ -487,10 +348,10 @@ namespace Unity.XR.PXR
         /// * `0`: success
         /// * `-1`: failure
         /// </returns>
-        [Obsolete("Please use StartHapticBuffer instead")]
+        [Obsolete("Please use StartHapticBuffer instead", true)]
         public static int StartVibrateByCache(int sourceId)
         {
-            return PXR_Plugin.Controller.UPxr_StartVibrateByCache(sourceId);
+            return -1;
         }
 
         /// @deprecated Use \ref StopHapticBuffer(clearCache) instead.
@@ -502,10 +363,10 @@ namespace Unity.XR.PXR
         /// * `0`: success
         /// * `-1`: failure
         /// </returns>
-        [Obsolete("Please use StopHapticBuffer(clearCache) instead")]
+        [Obsolete("Please use StopHapticBuffer(clearCache) instead", true)]
         public static int ClearVibrateByCache(int sourceId)
         {
-            return PXR_Plugin.Controller.UPxr_ClearVibrateByCache(sourceId);
+            return -1;
         }
 
         public static int SetControllerEnableKey(bool isEnable, PxrControllerKeyMap Key)
@@ -519,7 +380,7 @@ namespace Unity.XR.PXR
         /// </summary>
         /// <param name="phfText">The path to the PHF file.</param>
         /// <param name="sourceId">The source ID returned by `StartVibrateBySharem` or `SaveVibrateByCache`.</param>
-        /// <param name="vibrateController">The controller(s) to enable vibration for:
+        /// <param name="vibrateType">The controller(s) to enable vibration for:
         /// * `0`: none
         /// * `1`: left controller
         /// * `2`: right controller
@@ -537,10 +398,10 @@ namespace Unity.XR.PXR
         /// * `0`: success
         /// * `-1`: failure
         /// </returns>
-        [Obsolete("Please use SendHapticBuffer instead")]
-        public static int StartVibrateByPHF(TextAsset phfText, ref int sourceId, VibrateController vibrateController, ChannelFlip channelFlip, float amp)
+        [Obsolete("Please use SendHapticBuffer instead", true)]
+        public static int StartVibrateByPHF(TextAsset phfText, ref int sourceId, VibrateType vibrateType, ChannelFlip channelFlip, float amp)
         {
-            return PXR_Plugin.Controller.UPxr_StartVibrateByPHF(phfText.text, phfText.text.Length, ref sourceId, (int)vibrateController, (int)channelFlip, amp);
+            return -1;
         }
 
         /// @deprecated Use \ref PauseHapticBuffer instead.
@@ -552,10 +413,10 @@ namespace Unity.XR.PXR
         /// * `0`: success
         /// * `-1`: failure
         /// </returns>
-        [Obsolete("Please use PauseHapticBuffer instead")]
+        [Obsolete("Please use PauseHapticBuffer instead", true)]
         public static int PauseVibrate(int sourceId)
         {
-            return PXR_Plugin.Controller.UPxr_PauseVibrate(sourceId);
+            return -1;
         }
 
         /// @deprecated Use \ref ResumeHapticBuffer instead.
@@ -567,10 +428,10 @@ namespace Unity.XR.PXR
         /// * `0`: success
         /// * `-1`: failure
         /// </returns>
-        [Obsolete("Please use ResumeHapticBuffer instead")]
+        [Obsolete("Please use ResumeHapticBuffer instead", true)]
         public static int ResumeVibrate(int sourceId)
         {
-            return PXR_Plugin.Controller.UPxr_ResumeVibrate(sourceId);
+            return -1;
         }
 
         /// @deprecated Use \ref UpdateHapticBuffer instead.
@@ -578,7 +439,7 @@ namespace Unity.XR.PXR
         /// Dynamically updates PHF and AudioClip vibration data.
         /// </summary>
         /// <param name="sourceId">The source ID returned by `StartVibrateBySharem` or `SaveVibrateByCache`.</param>
-        /// <param name="vibrateController">The controller(s) to update PHF and AudioClip vibration data for:
+        /// <param name="vibrateType">The controller(s) to update PHF and AudioClip vibration data for:
         /// * `0`: none
         /// * `1`: left controller
         /// * `2`: right controller
@@ -596,10 +457,10 @@ namespace Unity.XR.PXR
         /// * `0`: success
         /// * `-1`: failure
         /// </returns>
-        [Obsolete("Please use UpdateHapticBuffer instead")]
-        public static int UpdateVibrateParams(int sourceId, VibrateController vibrateController, ChannelFlip channelFlip, float amp)
+        [Obsolete("Please use UpdateHapticBuffer instead", true)]
+        public static int UpdateVibrateParams(int sourceId, VibrateType vibrateType, ChannelFlip channelFlip, float amp)
         {
-            return PXR_Plugin.Controller.UPxr_UpdateVibrateParams(sourceId, (int)vibrateController, (int)channelFlip, amp);
+            return -1;
         }
 
         /// <summary>
@@ -607,18 +468,20 @@ namespace Unity.XR.PXR
         /// </summary>
         /// <param name="predictTime">Reserved parameter, pass `0`.</param>
         /// <param name="bodyTrackerResult">Contains the data about the poses of body joints, including position, action, and more.</param>
+        [Obsolete("Please use GetBodyTrackingData instead", true)]
         public static int GetBodyTrackingPose(double predictTime, ref BodyTrackerResult bodyTrackerResult)
         {
-            return PXR_Plugin.Controller.UPxr_GetBodyTrackingPose(predictTime, ref bodyTrackerResult);
+            return -1;
         }
 
         /// <summary>
         /// Gets the number of PICO Motion Trackers currently connected and their IDs.
         /// </summary>
         /// <param name="state">The number and IDs of connected PICO Motion Trackers.</param>
+        [Obsolete("Please use GetMotionTrackerConnectStateWithSN instead", true)]
         public static int GetMotionTrackerConnectStateWithID(ref PxrMotionTracker1ConnectState state)
         {
-            return PXR_Plugin.Controller.UPxr_GetMotionTrackerConnectStateWithID(ref state);
+            return -1;
         }
 
         /// <summary>
@@ -626,9 +489,10 @@ namespace Unity.XR.PXR
         /// </summary>
         /// <param name="trackerId">The ID of the motion tracker to get battery for.</param>
         /// <param name="battery">The motion tracker's battery. Value range: [0,5]. The smaller the value, the lower the battery level.</param>
+        [Obsolete("Please use GetMotionTrackerBatteryWithSN instead", true)]
         public static int GetMotionTrackerBattery(int trackerId, ref int battery)
         {
-            return PXR_Plugin.Controller.UPxr_GetMotionTrackerBattery(trackerId, ref battery);
+            return 0;
         }
 
         /// <summary>
@@ -638,9 +502,10 @@ namespace Unity.XR.PXR
         /// `0`: calibration uncompleted
         /// `1`: calibration completed
         /// </param>
+        [Obsolete("Please use GetBodyTrackingState instead", true)]
         public static int GetMotionTrackerCalibState(ref int calibrated)
         {
-            return PXR_Plugin.Controller.UPxr_GetMotionTrackerCalibState(ref calibrated);
+            return -1;
         }
 
         /// <summary>
@@ -657,9 +522,10 @@ namespace Unity.XR.PXR
         /// * `0`: success
         /// * `1`: failure
         /// </returns>
+        [Obsolete("Please use StartBodyTracking instead", true)]
         public static int SetBodyTrackingMode(BodyTrackingMode mode)
         {
-            return PXR_Plugin.Controller.UPxr_SetBodyTrackingMode(mode);
+            return 1;
         }
 
         /// <summary>
@@ -670,9 +536,10 @@ namespace Unity.XR.PXR
         /// * `0`: success
         /// * `1`: failure
         /// </returns>
+        [Obsolete("Please use StartBodyTracking instead", true)]
         public static int SetBodyTrackingBoneLength(BodyTrackingBoneLength boneLength)
         {
-            return PXR_Plugin.Controller.UPxr_SetBodyTrackingBoneLength(boneLength);
+            return 1;
         }
 
         /// <summary>
@@ -932,9 +799,10 @@ namespace Unity.XR.PXR
         /// * `0`: success
         /// * `1`: failure
         /// </returns>
+        [Obsolete("CreateHapticStream is not supported", true)]
         public static int CreateHapticStream(string phfVersion, UInt32 frameDurationMs, ref VibrateInfo hapticInfo, float speed, ref int id)
         {
-            return PXR_Plugin.Controller.UPxr_CreateHapticStream(phfVersion, frameDurationMs, ref hapticInfo, speed, ref id);
+            return 1;
         }
 
         /// <summary>
@@ -947,9 +815,10 @@ namespace Unity.XR.PXR
         /// * `0`: success
         /// * `1`: failure
         /// </returns>
+        [Obsolete("WriteHapticStream is not supported", true)]
         public static int WriteHapticStream(int id, ref PxrPhfParamsNum frames, UInt32 numFrames)
         {
-            return PXR_Plugin.Controller.UPxr_WriteHapticStream(id, ref frames, numFrames);
+            return 1;
         }
 
         /// <summary>
@@ -961,9 +830,10 @@ namespace Unity.XR.PXR
         /// * `0`: success
         /// * `1`: failure
         /// </returns>
+        [Obsolete("SetHapticStreamSpeed is not supported", true)]
         public static int SetHapticStreamSpeed(int id, float speed)
         {
-            return PXR_Plugin.Controller.UPxr_SetPHFHapticSpeed(id, speed);
+            return 1;
         }
 
         /// <summary>
@@ -975,9 +845,10 @@ namespace Unity.XR.PXR
         /// * `0`: success
         /// * `1`: failure
         /// </returns>
+        [Obsolete("GetHapticStreamSpeed is not supported", true)]
         public static int GetHapticStreamSpeed(int id, ref float speed)
         {
-            return PXR_Plugin.Controller.UPxr_GetPHFHapticSpeed(id, ref speed);
+            return 1;
         }
 
         /// <summary>
@@ -989,9 +860,10 @@ namespace Unity.XR.PXR
         /// * `0`: success
         /// * `1`: failure
         /// </returns>
+        [Obsolete("GetHapticStreamCurrentFrameSequence is not supported", true)]
         public static int GetHapticStreamCurrentFrameSequence(int id, ref UInt64 frameSequence)
         {
-            return PXR_Plugin.Controller.UPxr_GetCurrentFrameSequence(id, ref frameSequence);
+            return 1;
         }
 
         /// <summary>
@@ -1002,9 +874,10 @@ namespace Unity.XR.PXR
         /// * `0`: success
         /// * `1`: failure
         /// </returns>
+        [Obsolete("StartHapticStream is not supported", true)]
         public static int StartHapticStream(int source_id)
         {
-            return PXR_Plugin.Controller.UPxr_StartPHFHaptic(source_id);
+            return 1;
         }
 
         /// <summary>
@@ -1015,9 +888,10 @@ namespace Unity.XR.PXR
         /// * `0`: success
         /// * `1`: failure
         /// </returns>
+        [Obsolete("StopHapticStream is not supported", true)]
         public static int StopHapticStream(int source_id)
         {
-            return PXR_Plugin.Controller.UPxr_StopPHFHaptic(source_id);
+            return 1;
         }
 
         /// <summary>
@@ -1028,15 +902,17 @@ namespace Unity.XR.PXR
         /// * `0`: successGetMotionTrackerCalibState
         /// * `1`: failure
         /// </returns>
+        [Obsolete("RemoveHapticStream is not supported", true)]
         public static int RemoveHapticStream(int source_id)
         {
-            return PXR_Plugin.Controller.UPxr_RemovePHFHaptic(source_id);
+            return 1;
         }
 
         /// <summary>
         /// Parses the haptic data in a specified PICO haptic file (PHF).
         /// </summary>
         /// <param name="phfText">The PICO haptic file (.json) to parse.</param>
+        [Obsolete("AnalysisHapticStreamPHF is not supported", true)]
         public static PxrPhfFile AnalysisHapticStreamPHF(TextAsset phfText)
         {
             String str = phfText.text;
@@ -1046,10 +922,9 @@ namespace Unity.XR.PXR
         /// <summary>
         /// Recenters the controller on PICO G3.
         /// </summary>
+        [Obsolete("ResetController is not supported", true)]
         public static void ResetController()
-        {
-            PXR_Plugin.Controller.UPxr_ResetController();
-        }
+        {}
 
         /// <summary>
         /// Sets arm model parameters on PICO G3.
@@ -1059,10 +934,9 @@ namespace Unity.XR.PXR
         /// <param name="elbowHeight">The elbow's height, which changes the arm's length.Value range: (0.0f, 0.2f). The default value is 0.0f.</param>
         /// <param name="elbowDepth">The elbow's depth, which changes the arm's position.Value range: (0.0f, 0.2f). The default value is 0.0f.</param>
         /// <param name="pointerTiltAngle">The ray's tilt angle. Value range: (0.0f, 30.0f). The default value is 0.0f.</param>
+        [Obsolete("SetArmModelParameters is not supported", true)]
         public static void SetArmModelParameters(PxrGazeType gazetype, PxrArmModelType armmodeltype, float elbowHeight, float elbowDepth, float pointerTiltAngle)
-        {
-            PXR_Plugin.Controller.UPxr_SetArmModelParameters(gazetype, armmodeltype, elbowHeight, elbowDepth, pointerTiltAngle);
-        }
+        { }
 
         /// <summary>
         /// Gets the current user's dominant hand in the system on PICO G3.
@@ -1075,3 +949,4 @@ namespace Unity.XR.PXR
 
     }
 }
+#endif
