@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "source": {
+    "repository": "https://github.com/Pico-Developer/PICO-Unity-Integration-SDK.git",
+    "ref": "3.4.0",
+    "commit": "c9fbd66810bd514c0e543abd801da0f2e9f83a63"
+  },
+  "package": {
+    "name": "com.unity.xr.picoxr",
+    "version": "3.4.0",
+    "path": "PICO Unity Integration SDK",
+    "manifest_sha256": "f0aa1baf212fd7233a14b98cf1b802b17ed914d36a577b48cf351312fa52f7c2"
+  },
+  "unity_dependency": "file:../PICO Unity Integration SDK",
+  "compatibility_policy": {
+    "tob_service": "Keep the deployed tobservicelib-release.aar used by XRoboToolkit Enterprise APIs.",
+    "upstream_replacements_not_vendored": [
+      "Enterprise/android/capturelib-release.aar",
+      "Enterprise/android/tobservicelib-4.3.24.aar"
+    ]
+  },
+  "custom_files": [
+    {
+      "path": "PICO Unity Integration SDK/Enterprise/Scripts/Interfaces/MarkerInfoCallback.cs",
+      "sha256": "0d9bd455034d98327bf62e8e521c6f88e1844901013ed1f4a80da0c05c385be0",
+      "reason": "Remove high-frequency per-callback debug logging while retaining SDK 3.4 coordinate conversion."
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "PICO Unity Integration SDK/Enterprise/android/BAuthLib-1.0.0.aar",
+      "size_bytes": 45903,
+      "sha256": "3e0b6c637db4fff1f956e6c929a8470369bbd5b6916dabe6ff1ba83533553c6b",
+      "meta_sha256": "886fbdf980d4dba81214ffd74593d80c2238cf02708613c98de012245f195a34"
+    },
+    {
+      "path": "PICO Unity Integration SDK/Enterprise/android/CameraRenderingPlugin.aar",
+      "size_bytes": 108358,
+      "sha256": "d2d8caa83e740122216c01571a8781a236c8f5e03e5048e5178da7e7f0419846",
+      "meta_sha256": "6cd346f3ffa3685f6ec3c96f693c496df89193cc5ad95706ea99031233a3fb10"
+    },
+    {
+      "path": "PICO Unity Integration SDK/Enterprise/android/gson-2.10.1.jar",
+      "size_bytes": 283367,
+      "sha256": "4241c14a7727c34feea6507ec801318a3d4a90f070e4525681079fb94ee4c593",
+      "meta_sha256": "88a66cd721c58ab3d98f70672392711a12f67bbc72ea372701715ced27c6f710"
+    },
+    {
+      "path": "PICO Unity Integration SDK/Enterprise/android/tob_api-release.aar",
+      "size_bytes": 124921,
+      "sha256": "7b499c81fe2f9d6eba1cbe278aa8e24bdcdb528c3e9b1c66778f5c651a4846b8",
+      "meta_sha256": "fdd988b4ead52d6f13145a0fbcdfb51fb53a9af89d4280ffe281a52661936511"
+    },
+    {
+      "path": "PICO Unity Integration SDK/Enterprise/android/tobservicelib-release.aar",
+      "size_bytes": 755465,
+      "sha256": "d69835124df9aaab153d8cfe9032a5232eb2b693805ed4b147b7cd386094057e",
+      "meta_sha256": "6b1ba377e06cf9ebb53b5779b4d439393220ada30331773c64aa66014c64c73a"
+    },
+    {
+      "path": "PICO Unity Integration SDK/Runtime/Android/LoaderForUnitySDK_1_1_0.aar",
+      "size_bytes": 469825,
+      "sha256": "ce8cf71b82e53a491284b7dc5d5e8b64ead13714e7cc33ebbf0a0ef4c1f44f2c",
+      "meta_sha256": "b126e69eec69ced4e8df7f37f29b799a2ecb9f81abc0ef0cd8fea03722b8409d"
+    },
+    {
+      "path": "PICO Unity Integration SDK/Runtime/Android/PxrPlatform.aar",
+      "size_bytes": 443978,
+      "sha256": "d5e9825f90a382ae3e93d1eb065fd14171f509e84b8e59fba9f8f7a6c7b99795",
+      "meta_sha256": "74c020af394a73ce67430da204e2a4bae986159e3d63b88ceb3a1400a04a43bd"
+    }
+  ]
+}
